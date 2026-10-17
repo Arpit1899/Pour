@@ -2,244 +2,214 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-/// The window is a dark field with nothing drawn on it. There is exactly one
-/// object here — the notch — and everything else is type, whitespace and
-/// hairlines. Amber is reserved for what is live or wants a decision.
-private enum Surface {
-    static let window = Color(red: 0.086, green: 0.086, blue: 0.094)
-    static let hairline = Color.white.opacity(0.07)
-    static let label = Color.white
-    static let secondary = Color.white.opacity(0.45)
-    static let faint = Color.white.opacity(0.3)
-    /// Where the text column starts, past the glyph gutter. Rules and rows
-    /// align to it.
-    static let gutter: CGFloat = 34
+/// The pages in the sidebar.
+enum Page: String, CaseIterable, Identifiable {
+    case home, dictionary, style, settings
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .home:       "Home"
+        case .dictionary: "Dictionary"
+        case .style:      "Style"
+        case .settings:   "Settings"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .home:       "house"
+        case .dictionary: "character.book.closed"
+        case .style:      "textformat"
+        case .settings:   "gearshape"
+        }
+    }
 }
 
+/// A sidebar on the window's own background, and the current page on a
+/// lighter panel inset beside it. Light or dark follows the system.
 struct ContentView: View {
+    @State private var page: Page = .home
     @State private var permissions = PermissionStatus()
-    @State private var hoveringKeys = false
-    /// The last transcript, echoed back briefly under the keys.
-    @State private var recent: String?
-    @State private var echoTask: Task<Void, Never>?
-    @State private var shortcutRejected = false
-    @Environment(PourSessionModel.self) private var session
-    @Environment(PourSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Surface.window.ignoresSafeArea()
+        HStack(spacing: 0) {
+            Sidebar(page: $page, permissions: permissions)
+                .frame(width: 208)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 34) {
-                    hotkey
-                    shortcut
-                    polish
-                    vocabulary
-                    setup
-                    steps
+            Group {
+                switch page {
+                case .home:       HomePage()
+                case .dictionary: DictionaryPage()
+                case .style:      StylePage()
+                case .settings:   SettingsPage(permissions: permissions)
                 }
-                .frame(maxWidth: 400)
-                .padding(.horizontal, 30)
-                // Clears the closed header notch hanging above.
-                .padding(.top, 58)
-                .padding(.bottom, 30)
-                .frame(maxWidth: .infinity)
             }
-            .scrollBounceBehavior(.basedOnSize)
-
-            // The window wears the same shape it puts on screen — closed, and
-            // holding the lockup. It is a mark, not a second live HUD.
-            NotchHeader()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(PourTheme.canvas, in: .rect(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(PourTheme.hairline, lineWidth: 0.5)
+            }
+            .padding([.top, .trailing, .bottom], 8)
         }
-        // The header notch has to hang off the window's top edge the way the
-        // real one hangs off the display's, so the content must reach under
-        // the (hidden) titlebar rather than start below it.
-        .ignoresSafeArea(edges: .top)
-        .preferredColorScheme(.dark)
-        // A fixed pane. The column is a single readable measure, so letting
-        // the window grow would only add empty margin.
-        .frame(width: 500, height: 720)
+        .background(PourTheme.sidebar)
+        // The sidebar runs up under the hidden titlebar, traffic lights and all.
+        .ignoresSafeArea()
+        .frame(minWidth: 780, minHeight: 540)
         // Permissions are granted in System Settings, outside the app, so
         // re-read them whenever Pour comes back to the foreground.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { permissions.refresh() }
         }
     }
+}
 
-    // MARK: - Sections
+// MARK: - Sidebar
 
-    /// The keys are the control, and the line under them is the only thing
-    /// that ever speaks. It carries the prompt, the live state, and then what
-    /// you just said — so a finished transcript can never end up sitting on
-    /// its own looking like a stray string.
-    private var hotkey: some View {
-        VStack(spacing: 16) {
-            HoldableKeys(
-                caps: settings.hotKey.keyCaps,
-                isRecording: session.recorder.isRecording,
-                onPress: { Task { await session.begin() } },
-                onRelease: { Task { await session.end() } },
-                onHoverChange: { hoveringKeys = $0 }
-            )
-            statusLine
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 6)
-        // Registered on the container, not on the status text: the text is
-        // `.id`-ed so it can cross-dissolve, which tears down and rebuilds it
-        // on every change — taking any modifier attached to it along.
-        .onChange(of: session.recorder.finalTranscription) { _, new in
-            echo(new.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        .animation(.easeOut(duration: 0.18), value: status.text)
-    }
+private struct Sidebar: View {
+    @Binding var page: Page
+    var permissions: PermissionStatus
 
-    private var statusLine: some View {
-        Text(status.text)
-            .font(.system(size: 13))
-            .foregroundStyle(status.isEcho ? Surface.faint : Surface.secondary)
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .textSelection(.enabled)
-            .id(status.text)
-            .transition(.opacity)
-            // Fixed height: the line changes constantly, and the sections
-            // below it must not move when it does.
-            .frame(height: 36, alignment: .top)
-    }
-
-    /// `isEcho` marks the case where the line is quoting the user back to
-    /// themselves, which is styled a step quieter than an instruction.
-    private var status: (text: String, isEcho: Bool) {
-        if session.recorder.isRecording { return ("Listening… let go to finish", false) }
-        if let recent { return ("“\(recent)”", true) }
-        return (hoveringKeys ? "Hold these to try it" : "Hold anywhere to dictate", false)
-    }
-
-    /// Show what was heard, then hand the line back to the prompt.
-    private func echo(_ text: String) {
-        echoTask?.cancel()
-        guard !text.isEmpty else { recent = nil; return }
-        recent = text
-        echoTask = Task {
-            try? await Task.sleep(for: .seconds(6))
-            guard !Task.isCancelled else { return }
-            recent = nil
-        }
-    }
-
-    private var shortcut: some View {
-        @Bindable var settings = settings
-        return Section("Shortcut") {
-            HStack(spacing: 14) {
-                Image(systemName: "command")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Surface.faint)
-                    .frame(width: 20)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Hold to dictate")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Surface.label)
-                    Text(shortcutHint)
-                        .font(.system(size: 12))
-                        .foregroundStyle(shortcutRejected ? PourTheme.accent : Surface.secondary)
-                }
-
-                Spacer(minLength: 12)
-
-                ShortcutRecorder(combo: $settings.hotKey) {
-                    // A bare key would be captured system-wide; say so rather
-                    // than silently ignoring the press.
-                    shortcutRejected = true
-                }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 7) {
+                PourMark(size: 22)
+                PourWordmark(size: 17, weight: .medium)
             }
-            .padding(.vertical, 12)
-            .onChange(of: settings.hotKey) { _, _ in shortcutRejected = false }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 16)
+
+            ForEach(Page.allCases) { item in
+                SidebarItem(page: item, isSelected: page == item) { page = item }
+            }
+
+            Spacer(minLength: 16)
+
+            if !permissions.allGranted {
+                SetupCard(permissions: permissions) { page = .settings }
+            }
         }
+        .padding(.horizontal, 10)
+        // Clears the traffic lights.
+        .padding(.top, 50)
+        .padding(.bottom, 12)
     }
+}
 
-    private var shortcutHint: String {
-        shortcutRejected
-            ? "Include ⌘, ⌃, ⌥ or ⇧ — a bare key would be captured everywhere"
-            : "Click to record a new combination"
-    }
+private struct SidebarItem: View {
+    var page: Page
+    var isSelected: Bool
+    var select: () -> Void
 
-    private var polish: some View {
-        @Bindable var settings = settings
-        let readiness = TranscriptPolisher.readiness
-        return Section("Cleanup") {
-            ToggleRow(
-                symbol: "wand.and.sparkles",
-                title: "Tidy up what I said",
-                subtitle: readiness.explanation
-                    ?? "Punctuation, capitals, and dropped filler words — on-device",
-                isOn: $settings.cleanupEnabled,
-                enabled: readiness.isReady
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: 10) {
+                Image(systemName: page.symbol)
+                    .font(.system(size: 13))
+                    .frame(width: 18)
+                Text(page.title)
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                Color.primary.opacity(isSelected ? 0.07 : (hovering ? 0.04 : 0)),
+                in: .rect(cornerRadius: 8, style: .continuous)
             )
-            Rule()
-            ToggleRow(
-                symbol: "app.badge",
-                title: "Match the app",
-                subtitle: "Casual in chat, formal in mail, untouched in editors",
-                isOn: $settings.adaptTone,
-                enabled: readiness.isReady && settings.cleanupEnabled
-            )
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Shown until both permissions are in place, the way a setup checklist
+/// would be: what's done, what isn't, and one click to the fix.
+private struct SetupCard: View {
+    var permissions: PermissionStatus
+    var open: () -> Void
+
+    private var done: Int {
+        (permissions.microphone == .authorized ? 1 : 0) + (permissions.accessibility ? 1 : 0)
     }
 
-    private var vocabulary: some View {
-        Section("Vocabulary") {
-            VocabularyEditor(
-                terms: settings.vocabulary,
-                onAdd: settings.addVocabulary,
-                onRemove: settings.removeVocabulary
-            )
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Finish setup")
+                    .font(.system(size: 12, weight: .medium))
+                ProgressView(value: Double(done), total: 2)
+                    .progressViewStyle(.linear)
+                    .tint(PourTheme.accent)
+                    .controlSize(.small)
+                step("Microphone", isDone: permissions.microphone == .authorized)
+                step("Accessibility", isDone: permissions.accessibility)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PourTheme.canvas, in: .rect(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(PourTheme.hairline, lineWidth: 0.5)
+            }
         }
+        .buttonStyle(.plain)
     }
 
-    private var setup: some View {
-        Section("Setup", action: ("Re-check", permissions.refresh)) {
-            PermissionRow(
-                symbol: "mic",
-                title: "Microphone",
-                subtitle: "Capture your voice",
-                isGranted: permissions.microphone == .authorized,
-                grant: permissions.requestMicrophone
-            )
-            Rule()
-            PermissionRow(
-                symbol: "keyboard",
-                title: "Accessibility",
-                subtitle: "Paste into the app you're typing in",
-                isGranted: permissions.accessibility,
-                grant: permissions.requestAccessibility
-            )
+    private func step(_ title: String, isDone: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isDone ? PourTheme.accent : .secondary)
+            Text(title)
+                .foregroundStyle(isDone ? .secondary : .primary)
         }
+        .font(.system(size: 12))
     }
-
-    private var steps: some View {
-        Section("How it works") {
-            StepRow(number: 1, title: "Hold the hotkey",
-                    detail: "The notch opens up and starts listening.")
-            Rule()
-            StepRow(number: 2, title: "Speak naturally",
-                    detail: "Transcription runs on-device. Nothing leaves your Mac.")
-            Rule()
-            StepRow(number: 3, title: "Let go",
-                    detail: "The text lands in whatever you were typing in.")
-        }
-    }
-
 }
 
 // MARK: - Building blocks
 
-/// A quiet label over a stack of rows. No fill, no border, no card — the rows
-/// are separated by hairlines and nothing else.
-private struct Section<Content: View>: View {
+/// A page: a serif title, an optional line under it, and the content in a
+/// single readable column.
+struct PageScaffold<Content: View>: View {
+    var title: String
+    var subtitle: String?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 28, design: .serif))
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                content
+            }
+            .frame(maxWidth: 620, alignment: .leading)
+            .padding(.horizontal, 40)
+            .padding(.top, 36)
+            .padding(.bottom, 40)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+}
+
+/// A label over a card of rows.
+struct CardSection<Content: View>: View {
     var title: String
     var action: (label: String, run: () -> Void)?
     @ViewBuilder var content: Content
@@ -257,152 +227,117 @@ private struct Section<Content: View>: View {
             HStack {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Surface.secondary)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if let action {
                     Button(action.label, action: action.run)
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
-                        .foregroundStyle(Surface.faint)
+                        .foregroundStyle(.secondary)
                 }
             }
-            VStack(spacing: 0) { content }
+            Card { content }
         }
     }
 }
 
-private struct Rule: View {
+struct Card<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(PourTheme.card, in: .rect(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Between rows in a card.
+struct Rule: View {
     var body: some View {
         Rectangle()
-            .fill(Surface.hairline)
+            .fill(PourTheme.hairline)
             .frame(height: 0.5)
-            .padding(.leading, Surface.gutter)
+            .padding(.horizontal, 16)
     }
 }
 
-/// Quiet once granted, amber while it still wants a decision.
-private struct PermissionRow: View {
-    var symbol: String
+/// Title and explanation on the left, the control on the right.
+struct SettingRow<Trailing: View>: View {
     var title: String
-    var subtitle: String
-    var isGranted: Bool
-    var grant: () -> Void
+    var subtitle: String?
+    var subtitleColor: Color = .secondary
+    @ViewBuilder var trailing: Trailing
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: symbol)
-                .font(.system(size: 14))
-                .foregroundStyle(isGranted ? Surface.faint : PourTheme.accent)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Surface.label)
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Surface.secondary)
+                    .font(.system(size: 13, weight: .medium))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(subtitleColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-
             Spacer(minLength: 12)
-
-            if isGranted {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Surface.faint)
-                    .accessibilityLabel("Allowed")
-            } else {
-                Button("Allow", action: grant)
-                    .buttonStyle(AmberPill())
-            }
+            trailing
         }
-        .padding(.vertical, 13)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }
 
-private struct ToggleRow: View {
-    var symbol: String
+struct ToggleRow: View {
     var title: String
-    var subtitle: String
+    var subtitle: String?
     @Binding var isOn: Bool
-    var enabled: Bool
+    var enabled = true
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: symbol)
-                .font(.system(size: 14))
-                .foregroundStyle(Surface.faint)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Surface.label)
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Surface.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 12)
-
+        SettingRow(title: title, subtitle: subtitle) {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(PourTheme.accent)
         }
-        .padding(.vertical, 12)
         .opacity(enabled ? 1 : 0.45)
         .disabled(!enabled)
         .accessibilityElement(children: .combine)
     }
 }
 
-private struct StepRow: View {
-    var number: Int
+/// Quiet once granted, amber while it still wants a decision.
+struct PermissionRow: View {
     var title: String
-    var detail: String
+    var subtitle: String
+    var isGranted: Bool
+    var grant: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text("\(number)")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Surface.faint)
-                .frame(width: 20, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Surface.label)
-                Text(detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Surface.secondary)
+        SettingRow(title: title, subtitle: subtitle) {
+            if isGranted {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Allowed")
+            } else {
+                Button("Allow", action: grant)
+                    .buttonStyle(AmberPill())
             }
-            Spacer(minLength: 0)
         }
-        .padding(.vertical, 13)
     }
 }
 
-/// The window's own notch: the same silhouette Pour puts on the display,
-/// closed, carrying the lockup.
-private struct NotchHeader: View {
-    private let width: CGFloat = 164
-    private let height: CGFloat = 34
-    private let shoulder: CGFloat = 13
-
-    var body: some View {
-        NotchShape()
-            .fill(.black)
-            .frame(width: width + shoulder * 2, height: height)
-            .overlay {
-                HStack(spacing: 8) {
-                    PourMark(size: 18)
-                    PourWordmark(size: 15, color: .white)
-                }
-            }
-            .accessibilityHidden(true)
+struct AmberPill: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(PourTheme.accent.opacity(configuration.isPressed ? 0.8 : 1),
+                        in: .capsule)
     }
 }
 
@@ -418,8 +353,8 @@ private struct NotWindowDraggable: NSViewRepresentable {
 }
 
 /// Keycaps stay physical — they stand for real keys, so the shape carries
-/// meaning. Press and hold them and they do what the real keys do.
-private struct HoldableKeys: View {
+/// meaning. Press them and they do what the real keys do, in either mode.
+struct HoldableKeys: View {
     var caps: [String]
     var isRecording: Bool
     var onPress: () -> Void
@@ -453,40 +388,30 @@ private struct HoldableKeys: View {
                 }
         )
         .accessibilityElement()
-        .accessibilityLabel("Control Space — hold to dictate")
+        .accessibilityLabel("\(caps.joined(separator: " ")), press to dictate")
     }
 
     private func cap(_ label: String) -> some View {
         Text(label)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(isRecording ? PourTheme.accent : Surface.label)
-            .padding(.horizontal, 12)
-            .frame(minWidth: 38, minHeight: 32)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(isRecording ? PourTheme.accent : .primary)
+            .padding(.horizontal, 13)
+            .frame(minWidth: 42, minHeight: 36)
             .background(
-                (isRecording ? PourTheme.accent.opacity(0.16) : Color.white.opacity(0.07)),
+                isRecording ? AnyShapeStyle(PourTheme.accent.opacity(0.16)) : AnyShapeStyle(PourTheme.control),
                 in: .rect(cornerRadius: 9, style: .continuous)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(isRecording ? PourTheme.accent.opacity(0.5) : Surface.hairline,
+                    .strokeBorder(isRecording ? PourTheme.accent.opacity(0.5) : PourTheme.hairline,
                                   lineWidth: 0.5)
             }
-    }
-}
-
-private struct AmberPill: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(PourTheme.accent.opacity(configuration.isPressed ? 0.8 : 1),
-                        in: .capsule)
+            .shadow(color: .black.opacity(isRecording ? 0 : 0.06), radius: 0, y: 1)
     }
 }
 
 #Preview {
     ContentView()
         .environment(PourSessionModel())
+        .environment(PourSettings.shared)
 }

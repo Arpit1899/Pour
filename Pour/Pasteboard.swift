@@ -33,6 +33,13 @@ enum Pasteboard {
         return .pasted
     }
 
+    /// Onto the clipboard only, for the user to paste wherever they choose.
+    static func copy(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
     private static func synthesizeCmdV() {
         let src = CGEventSource(stateID: .combinedSessionState)
         let v = CGKeyCode(kVK_ANSI_V)

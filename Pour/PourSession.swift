@@ -9,15 +9,22 @@ import ApplicationServices
 final class PourSessionModel {
     let recorder = VoiceRecorderService()
     let settings = PourSettings.shared
+    let history = DictationHistory()
     private let polisher = TranscriptPolisher()
     var phase: Phase = .idle
-
-    /// Re-measured against the active display each time the HUD is shown.
-    var notch: NotchGeometry = .synthetic
 
     /// How the session that just ended actually finished. The closing frame
     /// reports this rather than assuming a paste happened.
     private(set) var outcome: PourOutcome = .nothingHeard
+
+    /// The transcript, held on screen because nothing editable had focus.
+    private(set) var heldText: String?
+    private var holdTask: Task<Void, Never>?
+    /// How long the held transcript stays before the bar settles.
+    static let holdDuration: Duration = .seconds(8)
+
+    /// A release that arrived before recording had started.
+    private var finishWhenReady = false
 
     /// Installed by `AppDelegate`, which owns the floating panel. Both the
     /// global hotkey and the in-app "Try it" button drive the same path.
@@ -25,10 +32,12 @@ final class PourSessionModel {
     var dismissHUD: (() -> Void)?
 
     enum Phase {
-        /// `summoning` and `dismissing` are the two frames where the shape is
-        /// flush with the hardware notch — they bookend every session so the
-        /// open and close both read as the notch itself moving.
-        case idle, summoning, listening, transcribing, polishing, inserting, dismissing, error
+        /// `summoning` and `dismissing` are the two frames where the bar is in
+        /// its resting shape — they bookend every session so the open and
+        /// close both read as the resting bar itself growing and settling.
+        /// `holding` shows the transcript with a Copy button, because there
+        /// was nowhere to paste it.
+        case idle, summoning, listening, transcribing, polishing, inserting, holding, dismissing, error
     }
 
     var hudState: PourState {
@@ -57,13 +66,63 @@ final class PourSessionModel {
         polisher.prewarm()
     }
 
-    /// Start listening, with the notch on screen.
+    /// The shortcut went down. Hold mode starts here; press-once mode starts
+    /// or finishes, depending on whether a dictation is already running.
+    func shortcutPressed() async {
+        if settings.activation == .toggle { await toggle() } else { await begin() }
+    }
+
+    func shortcutReleased() async {
+        guard settings.activation == .hold else { return }
+        await end()
+    }
+
+    /// Start when idle, finish when listening. Clicking the bar does this in
+    /// either mode.
+    func toggle() async {
+        switch phase {
+        case .idle, .holding:           await begin()
+        case .listening, .transcribing: await end()
+        default:                        break
+        }
+    }
+
+    /// Start listening, with the bar on screen.
     func begin() async {
+        // A new dictation replaces a transcript still waiting to be copied.
+        if phase == .holding {
+            holdTask?.cancel()
+            heldText = nil
+            phase = .idle
+        }
         presentHUD?()
         await start()
     }
 
-    /// Finish, paste, and close the notch.
+    /// Copy the held transcript, say so, and settle.
+    func copyHeld() async {
+        guard phase == .holding, let text = heldText else { return }
+        holdTask?.cancel()
+        Pasteboard.copy(text)
+        heldText = nil
+        outcome = .copied
+        phase = .inserting
+        try? await Task.sleep(for: .milliseconds(900))
+        guard phase == .inserting else { return }
+        await collapse()
+        dismissHUD?()
+    }
+
+    /// Put the held transcript away without copying it.
+    func dismissHeld() async {
+        guard phase == .holding else { return }
+        holdTask?.cancel()
+        heldText = nil
+        await collapse()
+        dismissHUD?()
+    }
+
+    /// Finish, paste, and settle the bar.
     func end() async {
         await stop()
         // On the error path an auto-dismiss is already in flight; leave the
@@ -73,6 +132,7 @@ final class PourSessionModel {
 
     private func start() async {
         guard phase == .idle else { return }
+        finishWhenReady = false
         phase = .summoning
 
         // Yield one frame so SwiftUI renders the entering state before the
@@ -87,15 +147,31 @@ final class PourSessionModel {
 
         phase = .listening
         do {
-            try await recorder.startRecording(vocabulary: settings.vocabulary)
-            phase = .transcribing
+            try await recorder.startRecording(vocabulary: settings.vocabulary,
+                                              microphoneUID: settings.microphoneUID,
+                                              languageID: settings.languageID)
+            // A quick release can finish the session while setup is still
+            // running; don't drag it back into listening.
+            if phase == .listening { phase = .transcribing }
         } catch {
+            // Only if nothing else has taken the session over meanwhile.
+            guard phase == .listening else { return }
             phase = .error
             autoDismiss(after: 1.6)
+            return
+        }
+        if finishWhenReady {
+            finishWhenReady = false
+            await end()
         }
     }
 
     private func stop() async {
+        // Released before recording even began: finish as soon as it has.
+        if phase == .summoning {
+            finishWhenReady = true
+            return
+        }
         guard phase == .listening || phase == .transcribing else { return }
         phase = .polishing
 
@@ -122,16 +198,36 @@ final class PourSessionModel {
         if final.isEmpty {
             outcome = .nothingHeard
         } else {
+            history.add(final, app: NSWorkspace.shared.frontmostApplication?.localizedName)
+            if TextFocus.current() == .notEditable {
+                hold(final)
+                return
+            }
             outcome = Pasteboard.deliver(final) == .pasted ? .pasted : .copied
         }
         phase = .inserting
         // The text has already landed; this beat is just long enough to read
-        // the confirmation before the notch closes.
+        // the confirmation before the bar settles.
         try? await Task.sleep(for: .milliseconds(220))
         await collapse()
     }
 
-    /// Pull the shape back onto the hardware notch, then stand down.
+    /// Nothing editable has focus, so pasting would go nowhere. Show the text
+    /// with a Copy button instead, and leave the clipboard alone.
+    private func hold(_ text: String) {
+        heldText = text
+        phase = .holding
+        holdTask = Task {
+            try? await Task.sleep(for: Self.holdDuration)
+            guard !Task.isCancelled else { return }
+            // Cleared first, so dismissing doesn't cancel this very task and
+            // cut the settle animation short.
+            holdTask = nil
+            await dismissHeld()
+        }
+    }
+
+    /// Shrink the bar back to rest, then stand down.
     private func collapse() async {
         phase = .dismissing
         try? await Task.sleep(for: .milliseconds(320))

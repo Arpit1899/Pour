@@ -55,20 +55,17 @@ struct VocabularyEditor: View {
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
 
-    private let hairline = Color.white.opacity(0.07)
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: "character.book.closed")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.3))
+                Image(systemName: "plus")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
                     .frame(width: 20)
 
                 TextField("Add a name, acronym or term", text: $draft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 13))
                     .focused($fieldFocused)
                     .onSubmit(commit)
 
@@ -84,7 +81,7 @@ struct VocabularyEditor: View {
             if terms.isEmpty {
                 Text("Names and jargon a general model would otherwise guess at — people you message, products you work on, acronyms.")
                     .font(.system(size: 12))
-                    .foregroundStyle(Color.white.opacity(0.45))
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 4)
             } else {
@@ -115,17 +112,16 @@ private struct TermPill: View {
         HStack(spacing: 5) {
             Text(term)
                 .font(.system(size: 12))
-                .foregroundStyle(.white)
             Image(systemName: "xmark")
                 .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(hovering ? .white : Color.white.opacity(0.35))
+                .foregroundStyle(hovering ? .primary : .tertiary)
         }
         .padding(.leading, 10)
         .padding(.trailing, 8)
         .padding(.vertical, 5)
-        .background(Color.white.opacity(hovering ? 0.13 : 0.07), in: .capsule)
+        .background(PourTheme.control.opacity(hovering ? 0.7 : 1), in: .capsule)
         .overlay {
-            Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+            Capsule().strokeBorder(PourTheme.hairline, lineWidth: 0.5)
         }
         .contentShape(.capsule)
         .onHover { hovering = $0 }

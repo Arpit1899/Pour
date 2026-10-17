@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 
 /// A recorded keyboard shortcut, stored in Carbon's vocabulary because that is
 /// what `RegisterEventHotKey` speaks.
@@ -86,7 +87,7 @@ enum ActivationMode: String, Codable, CaseIterable {
     var label: String {
         switch self {
         case .hold:   "Hold"
-        case .toggle: "Toggle"
+        case .toggle: "Press once"
         }
     }
 
@@ -135,8 +136,30 @@ final class PourSettings {
         didSet { defaults.set(vocabulary, forKey: Key.vocabulary) }
     }
 
+    /// Keep the resting bar above the Dock between dictations.
+    var showBarAlways: Bool {
+        didSet {
+            guard showBarAlways != oldValue else { return }
+            defaults.set(showBarAlways, forKey: Key.showBar)
+            onShowBarChange?(showBarAlways)
+        }
+    }
+
+    /// Core Audio UID of the chosen input, `nil` for the system default.
+    var microphoneUID: String? {
+        didSet { defaults.set(microphoneUID, forKey: Key.microphone) }
+    }
+
+    /// BCP 47 identifier of the language to listen for, `nil` to follow the
+    /// Mac's language and region.
+    var languageID: String? {
+        didSet { defaults.set(languageID, forKey: Key.language) }
+    }
+
     /// Installed by `AppDelegate` so a new shortcut takes effect immediately.
     var onHotKeyChange: ((HotKeyCombo) -> Void)?
+    /// Installed by `AppDelegate`, which owns the bar's panel.
+    var onShowBarChange: ((Bool) -> Void)?
 
     private let defaults: UserDefaults
 
@@ -146,6 +169,9 @@ final class PourSettings {
         static let vocabulary = "pour.vocabulary"
         static let cleanup = "pour.cleanup"
         static let adaptTone = "pour.adaptTone"
+        static let showBar = "pour.showBarAlways"
+        static let microphone = "pour.microphoneUID"
+        static let language = "pour.languageID"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -159,6 +185,9 @@ final class PourSettings {
         // an extra.
         self.cleanupEnabled = defaults.object(forKey: Key.cleanup) as? Bool ?? true
         self.adaptTone = defaults.object(forKey: Key.adaptTone) as? Bool ?? true
+        self.showBarAlways = defaults.object(forKey: Key.showBar) as? Bool ?? true
+        self.microphoneUID = defaults.string(forKey: Key.microphone)
+        self.languageID = defaults.string(forKey: Key.language)
     }
 
     func addVocabulary(_ term: String) {
@@ -186,4 +215,30 @@ final class PourSettings {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
+}
+
+/// Open at login, through the system's own Login Items list rather than a
+/// preference of ours, so the toggle and System Settings can never disagree.
+@MainActor
+@Observable
+final class LoginItem {
+    private(set) var status = SMAppService.mainApp.status
+
+    var isEnabled: Bool { status == .enabled }
+    /// The user turned it on, but macOS wants them to confirm in System Settings.
+    var needsApproval: Bool { status == .requiresApproval }
+
+    func set(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSLog("[pour] login item \(enabled ? "register" : "unregister") failed → \(error)")
+        }
+        refresh()
+    }
+
+    func refresh() { status = SMAppService.mainApp.status }
+
+    func openSystemSettings() { SMAppService.openSystemSettingsLoginItems() }
 }

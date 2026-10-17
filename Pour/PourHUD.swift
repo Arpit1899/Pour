@@ -11,277 +11,399 @@ enum PourOutcome {
     case pasted, copied, nothingHeard
 }
 
-// MARK: - Live audio meter
+/// Where the bar sits. Shared by the view, which draws inside the panel, and
+/// `AppDelegate`, which places the panel and decides when it takes clicks.
+enum BarLayout {
+    /// Room around the bar for the glow, the widest message and the card.
+    static let panelSize = CGSize(width: 440, height: 240)
+    /// From the panel's bottom edge to the bar's, so the glow isn't clipped.
+    static let inset: CGFloat = 22
+    /// From the top of the Dock (or the bottom of the screen) to the bar.
+    static let lift: CGFloat = 10
 
-/// Four rounded bars that ride the input level — the same visual language as
-/// the system dictation indicator.
-struct PourLevelMeter: View {
-    var active: Bool
-    var level: Double
+    static let cardWidth: CGFloat = 360
 
-    private let bars = 4
-    private let barWidth: CGFloat = 3
-    private let maxHeight: CGFloat = 16
-    private let minHeight: CGFloat = 3
-
-    var body: some View {
-        TimelineView(.animation(paused: !active)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(0..<bars, id: \.self) { i in
-                    Capsule(style: .continuous)
-                        .fill(PourTheme.accent)
-                        .frame(width: barWidth, height: height(bar: i, at: t))
-                }
-            }
-            .frame(width: 21, height: maxHeight)
-        }
-        .frame(width: 21, height: maxHeight)
-    }
-
-    private func height(bar i: Int, at t: TimeInterval) -> CGFloat {
-        guard active else { return minHeight }
-        // Two detuned sines per bar so neighbours never march in lockstep.
-        let phase = Double(i) * 1.9
-        let wobble = 0.55 + 0.45 * sin(t * 7.5 + phase)
-        let detail = 0.75 + 0.25 * sin(t * 13.1 + phase * 2.3)
-        // Floor the amplitude so silence still breathes — four bars pinned at
-        // their minimum read as an ellipsis, not a microphone.
-        let amplitude = min(1, max(0.3, level)) * wobble * detail
-        return minHeight + (maxHeight - minHeight) * amplitude
+    /// The area that reacts to the pointer, in the panel's own coordinates
+    /// (origin bottom left): what is drawn, grown from the bar's bottom edge
+    /// the way the bar grows, plus a margin so the resting bar is easy to hit.
+    static func hitRect(isActive: Bool, isHovering: Bool, cardHeight: CGFloat?) -> CGRect {
+        let drawn: CGSize = if let cardHeight { CGSize(width: cardWidth, height: cardHeight) }
+            else if isActive { CGSize(width: 260, height: 34) }
+            else if isHovering { CGSize(width: 250, height: 28) }
+            else { CGSize(width: 40, height: 8) }
+        let margin: CGFloat = 8
+        return CGRect(x: (panelSize.width - drawn.width) / 2 - margin,
+                      y: inset - margin,
+                      width: drawn.width + margin * 2,
+                      height: drawn.height + margin * 2)
     }
 }
 
-// MARK: - Transcript ticker
-
-/// The words as they land. The track shrinks to fit short transcripts and
-/// caps at `maxWidth`, so a single word sits centred instead of stranded
-/// against a fixed right edge.
-private struct PourTranscript: View {
-    var words: [String]
-    var maxWidth: CGFloat
-
-    /// Intrinsic width of the words, before the track clamps them.
-    @State private var contentWidth: CGFloat = 0
-
-    private static let visibleWindow = 16
-    /// How far the leading fade reaches, in points rather than a fraction of
-    /// the track — a fraction covers more text the wider the notch gets.
-    private static let fadeLength: CGFloat = 26
-
-    /// True only when there are words scrolled off the leading edge.
-    private var isClipped: Bool { contentWidth > maxWidth + 0.5 }
-
-    var body: some View {
-        let start = max(0, words.count - Self.visibleWindow)
-        let visible = (start..<words.count).map { (id: $0, text: words[$0]) }
-
-        HStack(spacing: 6) {
-            ForEach(visible, id: \.id) { word in
-                Text(word.text)
-                    .fixedSize()
-                    .transition(.pourWord)
-            }
-        }
-        .font(.system(size: 15))
-        .foregroundStyle(.white)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-        // Measured here, where the view is still its full intrinsic width —
-        // after the frame below it has already been clamped.
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
-        .frame(maxWidth: maxWidth, alignment: .trailing)
-        // The outer `fixedSize` is what makes the track size to its content:
-        // it proposes nil, so the flexible frame reports the text's own width
-        // clamped to `maxWidth`, rather than greedily filling the row. Short
-        // transcripts then sit centred; long ones fill and scroll leftward.
-        .fixedSize(horizontal: true, vertical: false)
-        .clipped()
-        .mask(leadingFade)
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: words.count)
-    }
-
-    /// The fade exists to say "there is more text off to the left". When the
-    /// transcript already fits there is nothing off to the left, and fading
-    /// anyway just swallows the first letter — so it collapses to opaque.
-    private var leadingFade: LinearGradient {
-        let end = isClipped ? min(0.4, Self.fadeLength / max(maxWidth, 1)) : 0
-        return LinearGradient(
-            stops: [
-                .init(color: .black.opacity(isClipped ? 0 : 1), location: 0),
-                .init(color: .black, location: end),
-                .init(color: .black, location: 1),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
+/// Whether the pointer is over the resting bar. AppKit tracks the pointer,
+/// because the panel ignores the mouse everywhere except over the bar, and
+/// SwiftUI reads it here.
+@Observable
+final class BarPointer {
+    var isHovering = false
+    /// The card's measured height while it is up, so only the card itself
+    /// takes clicks.
+    var cardHeight: CGFloat?
 }
 
-private struct PourWordEffect: ViewModifier {
-    var offsetY: CGFloat
-    var opacity: Double
-    func body(content: Content) -> some View {
-        content.offset(y: offsetY).opacity(opacity)
-    }
-}
+// MARK: - The bar
 
-private extension AnyTransition {
-    /// Opacity + a short rise. No blur: it cost a full-frame GPU pass per
-    /// word and glitched during fast speech.
-    static var pourWord: AnyTransition {
-        .asymmetric(
-            insertion: .modifier(active: PourWordEffect(offsetY: 5, opacity: 0),
-                                 identity: PourWordEffect(offsetY: 0, opacity: 1)),
-            removal: .modifier(active: PourWordEffect(offsetY: -4, opacity: 0),
-                               identity: PourWordEffect(offsetY: 0, opacity: 1))
-        )
-    }
-}
-
-// MARK: - The notch
-
-/// Pour lives in the camera housing. Collapsed, the shape sits exactly on the
-/// hardware notch and is invisible; activating it springs the same black shape
-/// wider and taller, so it reads as the notch itself opening up.
-struct PourNotchHUD: View {
-    var geometry: NotchGeometry
+/// Pour's dictation bar, just above the Dock. At rest it is a sliver; while
+/// you speak it opens into a warm glowing wave and nothing else, because the
+/// words can't be changed mid-sentence anyway — they arrive when you let go.
+struct PourBar: View {
+    /// A session is on screen. False while summoning and dismissing, so the
+    /// bar grows out of, and settles back into, its resting shape.
+    var isActive: Bool
+    /// Keep the resting bar on screen between sessions.
+    var showsIdle: Bool
+    var isHovering: Bool
+    /// What hovering the resting bar says, e.g. "Hold ⌃Space to dictate".
+    var hint: String
     var state: PourState
-    var words: [String]
     var audioLevel: Double
-    var elapsed: TimeInterval
     var outcome: PourOutcome
     var errorMessage: String?
     /// Fraction complete while a speech model installs, `nil` otherwise. The
-    /// first run in a new language downloads hundreds of megabytes; without
-    /// this the notch just sits on "Listening…" the whole time.
+    /// first run in a new language downloads hundreds of megabytes.
     var modelDownload: Double?
-    /// False while summoning and while dismissing, so the shape starts and
-    /// ends flush with the real notch.
-    var expanded: Bool
+    /// A transcript with nowhere to paste it, shown with a Copy button.
+    var heldText: String?
+    var onCopy: () -> Void = {}
+    var onDismiss: () -> Void = {}
+    var onCardHeight: (CGFloat?) -> Void = { _ in }
 
-    private var isLive: Bool { state == .listening || state == .transcribing }
+    private enum Mode: Equatable {
+        case hidden, rest, hint, wave, thinking
+        case message(symbol: String?, text: String)
+        case card(String)
 
-    private var width: CGFloat {
-        (expanded ? geometry.expandedWidth : geometry.collapsedWidth) + geometry.shoulder * 2
-    }
-    private var height: CGFloat {
-        expanded ? geometry.expandedHeight : geometry.collapsedHeight
-    }
-
-    var body: some View {
-        NotchShape()
-            .fill(.black)
-            .overlay { content.opacity(expanded ? 1 : 0) }
-            .frame(width: width, height: height)
-            .shadow(color: .black.opacity(expanded ? 0.45 : 0), radius: 22, y: 10)
-            // One spring drives width, height and the shadow together, which
-            // is what makes it feel like a single physical object.
-            .animation(.spring(response: 0.42, dampingFraction: 0.78), value: expanded)
-            // Short, so the cross-dissolve between two centred strings passes
-            // too quickly to read as overlapping text.
-            .animation(.easeOut(duration: 0.15), value: state)
+        var isLive: Bool { self == .wave || self == .thinking }
     }
 
-    private var content: some View {
-        VStack(spacing: 0) {
-            // Camera row: the housing occupies the middle, so the two shoulders
-            // either side of it carry the level on the left and the clock on
-            // the right.
-            HStack(spacing: 0) {
-                PourLevelMeter(active: isLive && modelDownload == nil,
-                               level: audioLevel)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Spacer(minLength: geometry.notchWidth)
-
-                Text(Self.clock(elapsed))
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.45))
-                    // Faded rather than removed, so the shoulder keeps its
-                    // width and nothing shifts when the clock appears.
-                    .opacity(isLive && elapsed >= 1 ? 1 : 0)
-                    .animation(.easeOut(duration: 0.3), value: elapsed >= 1)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .frame(height: geometry.notchHeight)
-
-            transcript
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var mode: Mode {
+        guard isActive else {
+            if !showsIdle { return .hidden }
+            return isHovering ? .hint : .rest
         }
-        .padding(.horizontal, geometry.shoulder + 16)
-        .padding(.bottom, 10)
-    }
-
-    @ViewBuilder
-    private var transcript: some View {
+        if let heldText { return .card(heldText) }
         if let progress = modelDownload {
-            label("Preparing speech model… \(Int(progress * 100))%",
-                  color: .white.opacity(0.55))
-        } else {
-            liveTranscript
+            return .message(symbol: nil, text: "Preparing speech model… \(Int(progress * 100))%")
         }
-    }
-
-    @ViewBuilder
-    private var liveTranscript: some View {
         switch state {
-        case .listening:
-            label("Listening…", color: .white.opacity(0.55))
-        case .transcribing, .polishing:
-            if words.isEmpty {
-                label("Listening…", color: .white.opacity(0.55))
-            } else {
-                PourTranscript(words: words,
-                               maxWidth: geometry.expandedWidth - 32)
-            }
+        case .listening, .transcribing:
+            return .wave
+        case .polishing:
+            return .thinking
         case .inserting:
             switch outcome {
-            case .pasted:       row("checkmark", "Pasted")
-            case .copied:       row("doc.on.clipboard", "Copied — press ⌘V to paste")
-            case .nothingHeard: row("mic.slash", "Nothing heard")
+            case .pasted:       return .message(symbol: "checkmark", text: "Pasted")
+            case .copied:       return .message(symbol: "doc.on.clipboard", text: "Copied, press ⌘V to paste")
+            case .nothingHeard: return .message(symbol: "mic.slash", text: "Nothing heard")
             }
         case .error:
-            row("exclamationmark.triangle.fill", errorMessage ?? "Microphone unavailable")
+            return .message(symbol: "exclamationmark.triangle.fill",
+                            text: errorMessage ?? "Microphone unavailable")
         }
     }
 
-    private func row(_ symbol: String, _ text: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
-            label(text, color: .white.opacity(0.8))
+    private var width: CGFloat? {
+        switch mode {
+        case .hidden, .rest:          40
+        case .wave, .thinking:        150
+        case .hint, .message, .card:  nil
         }
-        .foregroundStyle(.white.opacity(0.8))
     }
 
-    private func label(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.system(size: 15))
-            .foregroundStyle(color)
-            .lineLimit(1)
+    private var height: CGFloat? {
+        switch mode {
+        case .hidden, .rest: 8
+        case .hint:          28
+        case .card:          nil
+        default:             34
+        }
     }
 
-    private static func clock(_ t: TimeInterval) -> String {
-        String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
+    /// A capsule for every shape but the card, so the bar can round off into
+    /// the card and back.
+    private var shape: RoundedRectangle {
+        if case .card = mode { return RoundedRectangle(cornerRadius: 20, style: .continuous) }
+        return RoundedRectangle(cornerRadius: (height ?? 34) / 2, style: .continuous)
+    }
+
+    /// Louder speech reads as a bigger change than the raw level suggests.
+    private var level: Double { min(1, audioLevel).squareRoot() }
+
+    var body: some View {
+        content
+            .frame(width: width, height: height)
+            .background { background }
+            .clipShape(shape)
+            .background { if mode.isLive { BarGlow(level: mode == .wave ? level : 0.2) } }
+            .contentShape(shape)
+            .opacity(mode == .hidden ? 0 : 1)
+            .scaleEffect(mode == .hidden ? 0.6 : 1, anchor: .bottom)
+            .animation(.spring(response: 0.38, dampingFraction: 0.78), value: mode)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch mode {
+        case .hidden, .rest:
+            Color.clear
+        case .hint:
+            Text(hint)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .fixedSize()
+                .padding(.horizontal, 14)
+                .transition(.opacity)
+        case .wave, .thinking:
+            PourWave(level: level, thinking: mode == .thinking)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 3)
+                .transition(.opacity)
+        case .message(let symbol, let text):
+            HStack(spacing: 7) {
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                }
+                Text(text).font(.system(size: 13))
+            }
+            .foregroundStyle(.white.opacity(0.9))
+            .fixedSize()
+            .padding(.horizontal, 16)
+            .transition(.opacity)
+        case .card(let text):
+            HeldCard(text: text, onCopy: onCopy, onDismiss: onDismiss)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onCardHeight($0) }
+                .onDisappear { onCardHeight(nil) }
+                .transition(.opacity)
+        }
+    }
+
+    private var background: some View {
+        let resting = mode == .rest || mode == .hidden
+        return ZStack {
+            shape.fill(.black.opacity(resting ? 0.4 : 0.9))
+            shape.strokeBorder(.white.opacity(resting ? 0.3 : 0.1), lineWidth: 0.5)
+        }
+    }
+}
+
+/// The transcript, when there was no text field to paste it into: copy it,
+/// or let it go. It goes by itself when the ring runs out.
+private struct HeldCard: View {
+    var text: String
+    var onCopy: () -> Void
+    var onDismiss: () -> Void
+
+    @State private var shownAt = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("No text field selected")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+                Button(action: onDismiss) {
+                    CountdownRing(start: shownAt,
+                                  seconds: Double(PourSessionModel.holdDuration.components.seconds))
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+                .accessibilityLabel("Close")
+            }
+            Text(text)
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(5)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("Copy", action: onCopy)
+                    .buttonStyle(AmberPill())
+            }
+        }
+        .padding(16)
+        .frame(width: BarLayout.cardWidth)
+    }
+}
+
+private struct CountdownRing: View {
+    var start: Date
+    var seconds: Double
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let left = max(0, 1 - context.date.timeIntervalSince(start) / seconds)
+            ZStack {
+                Circle().stroke(.white.opacity(0.15), lineWidth: 1.5)
+                Circle()
+                    .trim(from: 0, to: left)
+                    .stroke(PourTheme.accent, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .frame(width: 22, height: 22)
+        .contentShape(.circle)
+    }
+}
+
+/// The light around the bar while it listens: the glow colors slowly turning,
+/// brighter when you speak louder.
+private struct BarGlow: View {
+    var level: Double
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let angle = context.date.timeIntervalSinceReferenceDate * 50
+            let ring = AngularGradient(colors: PourTheme.glow, center: .center,
+                                       angle: .degrees(angle.truncatingRemainder(dividingBy: 360)))
+            ZStack {
+                Capsule()
+                    .fill(ring)
+                    .blur(radius: 12)
+                    .opacity(0.35 + 0.45 * level)
+                    .scaleEffect(x: 1.02 + 0.06 * level, y: 1.15 + 0.35 * level)
+                Capsule()
+                    .strokeBorder(ring, lineWidth: 1)
+                    .opacity(0.55 + 0.4 * level)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: level)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - The wave
+
+/// Carried between frames: the eased level and the wave's own clock. A class
+/// so the canvas can update it while drawing without causing a view update.
+private final class WaveMotion {
+    var level: Double = 0
+    var clock: Double = 0
+    var lastTime: TimeInterval?
+}
+
+/// Overlapping warm lobes that swell with your voice — the Siri idea, drawn
+/// in Pour's colors. `thinking` keeps them low and quick while the transcript
+/// is being tidied.
+struct PourWave: View {
+    var level: Double
+    var thinking: Bool
+
+    @State private var motion = WaveMotion()
+
+    private struct Layer {
+        var color: Color
+        var frequency: Double
+        var speed: Double
+        var phase: Double
+        var weight: Double
+    }
+
+    private static let layers: [Layer] = [
+        Layer(color: PourTheme.ember,  frequency: 1.5, speed: 2.2,  phase: 0.0, weight: 1.0),
+        Layer(color: PourTheme.rose,   frequency: 2.2, speed: -1.8, phase: 1.3, weight: 0.8),
+        Layer(color: PourTheme.accent, frequency: 1.1, speed: 1.4,  phase: 2.4, weight: 0.95),
+        Layer(color: PourTheme.honey,  frequency: 2.8, speed: 2.7,  phase: 3.7, weight: 0.6),
+    ]
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            Canvas { ctx, size in
+                let now = context.date.timeIntervalSinceReferenceDate
+                let dt = motion.lastTime.map { min(0.1, max(0, now - $0)) } ?? 0
+                motion.lastTime = now
+                // Silence still breathes; a flat line reads as "not listening".
+                let target = thinking ? 0.16 : max(0.14, level)
+                motion.level += (target - motion.level) * (1 - exp(-dt * 10))
+                motion.clock += dt * (thinking ? 2.4 : 1)
+                draw(in: &ctx, size: size, level: motion.level, clock: motion.clock)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func draw(in ctx: inout GraphicsContext, size: CGSize, level: Double, clock: Double) {
+        let mid = size.height / 2
+        let lobes = Self.layers.map { lobe(for: $0, size: size, level: level, clock: clock) }
+
+        ctx.blendMode = .plusLighter
+        ctx.drawLayer { glow in
+            glow.addFilter(.blur(radius: 5))
+            glow.opacity = 0.8
+            for (layer, path) in zip(Self.layers, lobes) {
+                glow.fill(path, with: .color(layer.color.opacity(0.7)))
+            }
+        }
+        for (layer, path) in zip(Self.layers, lobes) {
+            ctx.fill(path, with: .linearGradient(
+                Gradient(colors: [layer.color.opacity(0), layer.color.opacity(0.85), layer.color.opacity(0)]),
+                startPoint: CGPoint(x: 0, y: mid),
+                endPoint: CGPoint(x: size.width, y: mid)))
+        }
+
+        var core = Path()
+        core.move(to: CGPoint(x: size.width * 0.08, y: mid))
+        core.addLine(to: CGPoint(x: size.width * 0.92, y: mid))
+        ctx.stroke(core, with: .linearGradient(
+            Gradient(colors: [.white.opacity(0), .white.opacity(0.55), .white.opacity(0)]),
+            startPoint: CGPoint(x: 0, y: mid), endPoint: CGPoint(x: size.width, y: mid)),
+                   lineWidth: 0.75)
+    }
+
+    /// The region between a sine wave and its mirror image, tapered to nothing
+    /// at both ends.
+    private func lobe(for layer: Layer, size: CGSize, level: Double, clock: Double) -> Path {
+        let steps = 48
+        let mid = size.height / 2
+        let swell = 0.7 + 0.3 * sin(clock * abs(layer.speed) * 0.6 + layer.phase)
+        let amplitude = (size.height / 2 - 1) * level * layer.weight * swell
+
+        func offset(_ i: Int) -> CGPoint {
+            let u = Double(i) / Double(steps)
+            let taper = pow(sin(.pi * u), 2)
+            let y = amplitude * taper * sin(u * .pi * 2 * layer.frequency + clock * layer.speed + layer.phase)
+            return CGPoint(x: u * size.width, y: y)
+        }
+
+        var path = Path()
+        for i in 0...steps {
+            let p = offset(i)
+            let point = CGPoint(x: p.x, y: mid - p.y)
+            i == 0 ? path.move(to: point) : path.addLine(to: point)
+        }
+        for i in stride(from: steps, through: 0, by: -1) {
+            let p = offset(i)
+            path.addLine(to: CGPoint(x: p.x, y: mid + p.y))
+        }
+        path.closeSubpath()
+        return path
     }
 }
 
 #Preview {
-    // A stand-in for the top of a display so the shoulders read.
-    VStack {
-        PourNotchHUD(
-            geometry: .synthetic,
-            state: .transcribing,
-            words: "the notch opens up and the words land in it".split(separator: " ").map(String.init),
-            audioLevel: 0.6,
-            elapsed: 4,
-            outcome: .nothingHeard,
-            errorMessage: nil,
-            modelDownload: nil,
-            expanded: true
-        )
-        Spacer()
+    VStack(spacing: 40) {
+        PourBar(isActive: false, showsIdle: true, isHovering: false, hint: "Hold ⌃Space to dictate",
+                state: .listening, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
+        PourBar(isActive: false, showsIdle: true, isHovering: true, hint: "Hold ⌃Space to dictate",
+                state: .listening, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
+        PourBar(isActive: true, showsIdle: true, isHovering: false, hint: "",
+                state: .transcribing, audioLevel: 0.4, outcome: .pasted, errorMessage: nil, modelDownload: nil)
+        PourBar(isActive: true, showsIdle: true, isHovering: false, hint: "",
+                state: .inserting, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
     }
-    .frame(width: 900, height: 300)
+    .padding(60)
     .background(LinearGradient(colors: [.indigo, .black], startPoint: .top, endPoint: .bottom))
 }

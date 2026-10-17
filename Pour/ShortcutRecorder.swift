@@ -25,18 +25,18 @@ struct ShortcutRecorder: View {
             Text(isRecording ? "Press keys…" : combo.displayString)
                 .font(.system(size: 13, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(isRecording ? PourTheme.accent : .white)
+                .foregroundStyle(isRecording ? PourTheme.accent : .primary)
                 .frame(minWidth: 96, minHeight: 30)
                 .padding(.horizontal, 12)
                 .background(
-                    Color.white.opacity(isRecording ? 0.10 : (hovering ? 0.10 : 0.07)),
+                    PourTheme.control.opacity(isRecording || hovering ? 0.75 : 1),
                     in: .rect(cornerRadius: 8, style: .continuous)
                 )
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(
                             isRecording ? PourTheme.accent.opacity(0.6)
-                                        : Color.white.opacity(0.12),
+                                        : PourTheme.hairline,
                             lineWidth: isRecording ? 1 : 0.5
                         )
                 }

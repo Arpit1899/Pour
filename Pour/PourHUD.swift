@@ -14,47 +14,55 @@ enum PourOutcome {
 /// Where the bar sits. Shared by the view, which draws inside the panel, and
 /// `AppDelegate`, which places the panel and decides when it takes clicks.
 enum BarLayout {
-    /// Room around the bar for the glow, the widest message and the card.
-    static let panelSize = CGSize(width: 440, height: 240)
-    /// From the panel's bottom edge to the bar's, so the glow isn't clipped.
+    /// Room around the bar for the glow, the widest message and the card,
+    /// whichever edge the bar is docked to.
+    static let panelSize = CGSize(width: 460, height: 260)
+    /// From the panel's docked edge to the bar, so the glow isn't clipped.
     static let inset: CGFloat = 22
-    /// From the top of the Dock (or the bottom of the screen) to the bar.
+    /// From the Dock, or the screen edge, to the bar.
     static let lift: CGFloat = 10
+    /// The bar's thickness while it listens.
+    static let thickness: CGFloat = 34
 
     static let cardWidth: CGFloat = 360
 
     /// The area that reacts to the pointer, in the panel's own coordinates
-    /// (origin bottom left): what is drawn, grown from the bar's bottom edge
-    /// the way the bar grows, plus a margin so the resting bar is easy to hit.
-    static func hitRect(isActive: Bool, isHovering: Bool, cardHeight: CGFloat?) -> CGRect {
-        let drawn: CGSize = if let cardHeight { CGSize(width: cardWidth, height: cardHeight) }
-            else if isActive { CGSize(width: 260, height: 34) }
-            else if isHovering { CGSize(width: 250, height: 28) }
-            else { CGSize(width: 40, height: 8) }
+    /// (origin bottom left): what is drawn right now, plus the resting bar so
+    /// the hint can't flicker on and off at its edge, plus a margin.
+    static func hitRect(dock: BarDock, drawn: CGSize) -> CGRect {
+        let rest = dock.isVertical ? CGSize(width: 8, height: 40) : CGSize(width: 40, height: 8)
         let margin: CGFloat = 8
-        return CGRect(x: (panelSize.width - drawn.width) / 2 - margin,
-                      y: inset - margin,
-                      width: drawn.width + margin * 2,
-                      height: drawn.height + margin * 2)
+        return place(drawn, dock: dock).union(place(rest, dock: dock))
+            .insetBy(dx: -margin, dy: -margin)
+    }
+
+    private static func place(_ size: CGSize, dock: BarDock) -> CGRect {
+        let origin: CGPoint = switch dock {
+        case .bottom: CGPoint(x: (panelSize.width - size.width) / 2, y: inset)
+        case .left:   CGPoint(x: inset, y: (panelSize.height - size.height) / 2)
+        case .right:  CGPoint(x: panelSize.width - inset - size.width,
+                              y: (panelSize.height - size.height) / 2)
+        }
+        return CGRect(origin: origin, size: size)
     }
 }
 
-/// Whether the pointer is over the resting bar. AppKit tracks the pointer,
-/// because the panel ignores the mouse everywhere except over the bar, and
-/// SwiftUI reads it here.
+/// The pointer, as AppKit sees it, because the panel ignores the mouse
+/// everywhere except over the bar; and the bar's drawn size, as SwiftUI
+/// measures it, so only the bar takes clicks.
 @Observable
 final class BarPointer {
     var isHovering = false
-    /// The card's measured height while it is up, so only the card itself
-    /// takes clicks.
-    var cardHeight: CGFloat?
+    var isDragging = false
+    var barSize = CGSize(width: 40, height: 8)
 }
 
 // MARK: - The bar
 
-/// Pour's dictation bar, just above the Dock. At rest it is a sliver; while
-/// you speak it opens into a warm glowing wave and nothing else, because the
-/// words can't be changed mid-sentence anyway — they arrive when you let go.
+/// Pour's dictation bar, docked at the bottom of the screen or standing up on
+/// either side. At rest it is a sliver; while you speak it opens into a warm
+/// aurora and nothing else, because the words can't be changed mid-sentence
+/// anyway — they arrive when you let go.
 struct PourBar: View {
     /// A session is on screen. False while summoning and dismissing, so the
     /// bar grows out of, and settles back into, its resting shape.
@@ -73,9 +81,10 @@ struct PourBar: View {
     var modelDownload: Double?
     /// A transcript with nowhere to paste it, shown with a Copy button.
     var heldText: String?
+    var dock: BarDock = .bottom
     var onCopy: () -> Void = {}
     var onDismiss: () -> Void = {}
-    var onCardHeight: (CGFloat?) -> Void = { _ in }
+    var onSize: (CGSize) -> Void = { _ in }
 
     private enum Mode: Equatable {
         case hidden, rest, hint, wave, thinking
@@ -111,20 +120,21 @@ struct PourBar: View {
         }
     }
 
-    private var width: CGFloat? {
-        switch mode {
-        case .hidden, .rest:          40
-        case .wave, .thinking:        150
-        case .hint, .message, .card:  nil
+    /// The resting sliver and the listening bar run along the docked edge;
+    /// words always read across.
+    private var size: (width: CGFloat?, height: CGFloat?) {
+        let along: (CGFloat, CGFloat)? = switch mode {
+        case .hidden, .rest:   (40, 8)
+        case .wave, .thinking: (150, BarLayout.thickness)
+        default:               nil
         }
-    }
-
-    private var height: CGFloat? {
+        if let along {
+            return dock.isVertical ? (along.1, along.0) : (along.0, along.1)
+        }
         switch mode {
-        case .hidden, .rest: 8
-        case .hint:          28
-        case .card:          nil
-        default:             34
+        case .hint: return (nil, 28)
+        case .card: return (nil, nil)
+        default:    return (nil, BarLayout.thickness)
         }
     }
 
@@ -132,22 +142,33 @@ struct PourBar: View {
     /// the card and back.
     private var shape: RoundedRectangle {
         if case .card = mode { return RoundedRectangle(cornerRadius: 20, style: .continuous) }
-        return RoundedRectangle(cornerRadius: (height ?? 34) / 2, style: .continuous)
+        let short = min(size.width ?? .infinity, size.height ?? BarLayout.thickness)
+        return RoundedRectangle(cornerRadius: short / 2, style: .continuous)
     }
 
     /// Louder speech reads as a bigger change than the raw level suggests.
     private var level: Double { min(1, audioLevel).squareRoot() }
 
+    private var anchor: UnitPoint {
+        switch dock {
+        case .bottom: .bottom
+        case .left:   .leading
+        case .right:  .trailing
+        }
+    }
+
     var body: some View {
         content
-            .frame(width: width, height: height)
+            .frame(width: size.width, height: size.height)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
             .background { background }
             .clipShape(shape)
-            .background { if mode.isLive { BarGlow(level: mode == .wave ? level : 0.2) } }
+            .overlay { if mode.isLive { AuroraRim(level: mode == .wave ? level : 0.2, shape: shape) } }
             .contentShape(shape)
             .opacity(mode == .hidden ? 0 : 1)
-            .scaleEffect(mode == .hidden ? 0.6 : 1, anchor: .bottom)
+            .scaleEffect(mode == .hidden ? 0.6 : 1, anchor: anchor)
             .animation(.spring(response: 0.38, dampingFraction: 0.78), value: mode)
+            .animation(.spring(response: 0.45, dampingFraction: 0.8), value: dock)
     }
 
     @ViewBuilder
@@ -163,9 +184,7 @@ struct PourBar: View {
                 .padding(.horizontal, 14)
                 .transition(.opacity)
         case .wave, .thinking:
-            PourWave(level: level, thinking: mode == .thinking)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 3)
+            PourAurora(level: level, thinking: mode == .thinking)
                 .transition(.opacity)
         case .message(let symbol, let text):
             HStack(spacing: 7) {
@@ -180,8 +199,6 @@ struct PourBar: View {
             .transition(.opacity)
         case .card(let text):
             HeldCard(text: text, onCopy: onCopy, onDismiss: onDismiss)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onCardHeight($0) }
-                .onDisappear { onCardHeight(nil) }
                 .transition(.opacity)
         }
     }
@@ -259,64 +276,63 @@ private struct CountdownRing: View {
     }
 }
 
-/// The light around the bar while it listens: the glow colors slowly turning,
+/// The light running round the rim while the bar listens: the glow colors
+/// turning slowly, a soft halo outside and a fine line on the edge, both
 /// brighter when you speak louder.
-private struct BarGlow: View {
+private struct AuroraRim: View {
     var level: Double
+    var shape: RoundedRectangle
 
     var body: some View {
         TimelineView(.animation) { context in
-            let angle = context.date.timeIntervalSinceReferenceDate * 50
+            let angle = context.date.timeIntervalSinceReferenceDate * 52
             let ring = AngularGradient(colors: PourTheme.glow, center: .center,
                                        angle: .degrees(angle.truncatingRemainder(dividingBy: 360)))
             ZStack {
-                Capsule()
-                    .fill(ring)
-                    .blur(radius: 12)
-                    .opacity(0.35 + 0.45 * level)
-                    .scaleEffect(x: 1.02 + 0.06 * level, y: 1.15 + 0.35 * level)
-                Capsule()
-                    .strokeBorder(ring, lineWidth: 1)
+                shape.stroke(ring, lineWidth: 4)
+                    .blur(radius: 5)
+                    .opacity(0.3 + 0.5 * level)
+                shape.strokeBorder(ring, lineWidth: 1.2)
                     .opacity(0.55 + 0.4 * level)
             }
+            .blendMode(.plusLighter)
         }
         .animation(.easeOut(duration: 0.18), value: level)
         .allowsHitTesting(false)
     }
 }
 
-// MARK: - The wave
+// MARK: - The aurora
 
-/// Carried between frames: the eased level and the wave's own clock. A class
-/// so the canvas can update it while drawing without causing a view update.
-private final class WaveMotion {
+/// Carried between frames: the eased level and the aurora's own clock. A
+/// class so the canvas can update it while drawing without causing a view
+/// update.
+private final class AuroraMotion {
     var level: Double = 0
     var clock: Double = 0
     var lastTime: TimeInterval?
 }
 
-/// Overlapping warm lobes that swell with your voice — the Siri idea, drawn
-/// in Pour's colors. `thinking` keeps them low and quick while the transcript
-/// is being tidied.
-struct PourWave: View {
+/// Soft fields of warm color drifting along the bar, brighter and taller as
+/// you speak. `thinking` keeps them dim and quick while the transcript is
+/// being tidied. Runs along the long side, so it works standing up too.
+struct PourAurora: View {
     var level: Double
     var thinking: Bool
 
-    @State private var motion = WaveMotion()
+    @State private var motion = AuroraMotion()
 
-    private struct Layer {
+    private struct Field {
         var color: Color
-        var frequency: Double
         var speed: Double
         var phase: Double
-        var weight: Double
     }
 
-    private static let layers: [Layer] = [
-        Layer(color: PourTheme.ember,  frequency: 1.5, speed: 2.2,  phase: 0.0, weight: 1.0),
-        Layer(color: PourTheme.rose,   frequency: 2.2, speed: -1.8, phase: 1.3, weight: 0.8),
-        Layer(color: PourTheme.accent, frequency: 1.1, speed: 1.4,  phase: 2.4, weight: 0.95),
-        Layer(color: PourTheme.honey,  frequency: 2.8, speed: 2.7,  phase: 3.7, weight: 0.6),
+    private static let fields: [Field] = [
+        Field(color: PourTheme.ember,  speed: 0.33, phase: 0),
+        Field(color: PourTheme.rose,   speed: 0.27, phase: 2.1),
+        Field(color: PourTheme.honey,  speed: 0.41, phase: 4.2),
+        Field(color: PourTheme.accent, speed: 0.22, phase: 1),
     ]
 
     var body: some View {
@@ -325,10 +341,10 @@ struct PourWave: View {
                 let now = context.date.timeIntervalSinceReferenceDate
                 let dt = motion.lastTime.map { min(0.1, max(0, now - $0)) } ?? 0
                 motion.lastTime = now
-                // Silence still breathes; a flat line reads as "not listening".
-                let target = thinking ? 0.16 : max(0.14, level)
+                // Silence still glows faintly; a dark bar reads as "not listening".
+                let target = thinking ? 0.2 : max(0.12, level)
                 motion.level += (target - motion.level) * (1 - exp(-dt * 10))
-                motion.clock += dt * (thinking ? 2.4 : 1)
+                motion.clock += dt * (thinking ? 3 : 1)
                 draw(in: &ctx, size: size, level: motion.level, clock: motion.clock)
             }
         }
@@ -336,73 +352,35 @@ struct PourWave: View {
     }
 
     private func draw(in ctx: inout GraphicsContext, size: CGSize, level: Double, clock: Double) {
-        let mid = size.height / 2
-        let lobes = Self.layers.map { lobe(for: $0, size: size, level: level, clock: clock) }
-
+        var length = size.width, depth = size.height
+        if size.height > size.width {
+            // Standing up: draw the same thing turned a quarter.
+            ctx.translateBy(x: size.width, y: 0)
+            ctx.rotate(by: .degrees(90))
+            swap(&length, &depth)
+        }
         ctx.blendMode = .plusLighter
-        ctx.drawLayer { glow in
-            glow.addFilter(.blur(radius: 5))
-            glow.opacity = 0.8
-            for (layer, path) in zip(Self.layers, lobes) {
-                glow.fill(path, with: .color(layer.color.opacity(0.7)))
-            }
+        ctx.addFilter(.blur(radius: 6.5))
+        for field in Self.fields {
+            let cx = length * (0.5 + 0.48 * sin(clock * field.speed + field.phase))
+            let cy = depth * (0.5 + 0.25 * sin(clock * field.speed * 1.7 + field.phase))
+            let rx = length * 0.32
+            let ry = depth * (0.55 + 0.35 * level)
+            ctx.fill(Path(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2)),
+                     with: .color(field.color.opacity(0.25 + 0.6 * level)))
         }
-        for (layer, path) in zip(Self.layers, lobes) {
-            ctx.fill(path, with: .linearGradient(
-                Gradient(colors: [layer.color.opacity(0), layer.color.opacity(0.85), layer.color.opacity(0)]),
-                startPoint: CGPoint(x: 0, y: mid),
-                endPoint: CGPoint(x: size.width, y: mid)))
-        }
-
-        var core = Path()
-        core.move(to: CGPoint(x: size.width * 0.08, y: mid))
-        core.addLine(to: CGPoint(x: size.width * 0.92, y: mid))
-        ctx.stroke(core, with: .linearGradient(
-            Gradient(colors: [.white.opacity(0), .white.opacity(0.55), .white.opacity(0)]),
-            startPoint: CGPoint(x: 0, y: mid), endPoint: CGPoint(x: size.width, y: mid)),
-                   lineWidth: 0.75)
-    }
-
-    /// The region between a sine wave and its mirror image, tapered to nothing
-    /// at both ends.
-    private func lobe(for layer: Layer, size: CGSize, level: Double, clock: Double) -> Path {
-        let steps = 48
-        let mid = size.height / 2
-        let swell = 0.7 + 0.3 * sin(clock * abs(layer.speed) * 0.6 + layer.phase)
-        let amplitude = (size.height / 2 - 1) * level * layer.weight * swell
-
-        func offset(_ i: Int) -> CGPoint {
-            let u = Double(i) / Double(steps)
-            let taper = pow(sin(.pi * u), 2)
-            let y = amplitude * taper * sin(u * .pi * 2 * layer.frequency + clock * layer.speed + layer.phase)
-            return CGPoint(x: u * size.width, y: y)
-        }
-
-        var path = Path()
-        for i in 0...steps {
-            let p = offset(i)
-            let point = CGPoint(x: p.x, y: mid - p.y)
-            i == 0 ? path.move(to: point) : path.addLine(to: point)
-        }
-        for i in stride(from: steps, through: 0, by: -1) {
-            let p = offset(i)
-            path.addLine(to: CGPoint(x: p.x, y: mid + p.y))
-        }
-        path.closeSubpath()
-        return path
     }
 }
 
 #Preview {
     VStack(spacing: 40) {
-        PourBar(isActive: false, showsIdle: true, isHovering: false, hint: "Hold ⌃Space to dictate",
-                state: .listening, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
         PourBar(isActive: false, showsIdle: true, isHovering: true, hint: "Hold ⌃Space to dictate",
                 state: .listening, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
         PourBar(isActive: true, showsIdle: true, isHovering: false, hint: "",
                 state: .transcribing, audioLevel: 0.4, outcome: .pasted, errorMessage: nil, modelDownload: nil)
         PourBar(isActive: true, showsIdle: true, isHovering: false, hint: "",
-                state: .inserting, audioLevel: 0, outcome: .pasted, errorMessage: nil, modelDownload: nil)
+                state: .transcribing, audioLevel: 0.4, outcome: .pasted, errorMessage: nil, modelDownload: nil,
+                dock: .left)
     }
     .padding(60)
     .background(LinearGradient(colors: [.indigo, .black], startPoint: .top, endPoint: .bottom))

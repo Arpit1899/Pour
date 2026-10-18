@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pointerMonitors: [Any] = []
     private var pointerTimer: Timer?
 
+    private let dockTargets = DockTargetsModel()
+    private var targetsPanel: NSPanel?
+    /// Where the pointer and the panel were when a drag began.
+    private var dragStart: (mouse: NSPoint, origin: NSPoint)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Build the panel up front so the first hotkey press doesn't pay for
         // constructing it.
@@ -70,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             GlobalHotKey.shared.register(combo)
         }
         settings.onShowBarChange = { [weak self] _ in self?.updateRestingBar() }
+        settings.onBarDockChange = { [weak self] in self?.placeBar(animated: true) }
 
         // The Dock can grow, shrink or move, and displays come and go.
         NotificationCenter.default.addObserver(
@@ -122,19 +128,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Bottom centre of the display you're working on, just clear of the Dock.
-    /// `visibleFrame` already excludes the Dock, wherever it is and however
-    /// big, and includes the whole bottom edge when the Dock hides itself.
-    private func placeBar() {
+    private func placeBar(animated: Bool = false) {
         guard let panel = barPanel, let screen = NSScreen.main else { return }
+        let frame = barFrame(for: settings.barDock, on: screen)
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: false)
+        }
+    }
+
+    /// The panel for each dock on the display you're working on: bottom
+    /// centre, or halfway up either side, just clear of the Dock.
+    /// `visibleFrame` already excludes the Dock, wherever it is and however
+    /// big, and reaches the screen edge when the Dock hides itself.
+    private func barFrame(for dock: BarDock, on screen: NSScreen) -> NSRect {
         let size = BarLayout.panelSize
-        panel.setFrame(
-            NSRect(x: screen.frame.midX - size.width / 2,
-                   y: screen.visibleFrame.minY + BarLayout.lift - BarLayout.inset,
-                   width: size.width,
-                   height: size.height),
-            display: false
-        )
+        let area = screen.visibleFrame
+        let origin: NSPoint = switch dock {
+        case .bottom: NSPoint(x: screen.frame.midX - size.width / 2,
+                              y: area.minY + BarLayout.lift - BarLayout.inset)
+        case .left:   NSPoint(x: area.minX + BarLayout.lift - BarLayout.inset,
+                              y: area.midY - size.height / 2)
+        case .right:  NSPoint(x: area.maxX - BarLayout.lift + BarLayout.inset - size.width,
+                              y: area.midY - size.height / 2)
+        }
+        return NSRect(origin: origin, size: size)
+    }
+
+    // MARK: - Moving the bar
+
+    /// The spots the bar can snap to, in screen coordinates, each centred on
+    /// where the listening bar sits in that dock.
+    private func dockZones(on screen: NSScreen) -> [BarDock: CGRect] {
+        let area = screen.visibleFrame
+        let near = BarLayout.lift + BarLayout.thickness / 2
+        let long: CGFloat = 180, short: CGFloat = 60
+        func zone(_ center: CGPoint, _ size: CGSize) -> CGRect {
+            CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                   width: size.width, height: size.height)
+        }
+        return [
+            .bottom: zone(CGPoint(x: screen.frame.midX, y: area.minY + near), CGSize(width: long, height: short)),
+            .left:   zone(CGPoint(x: area.minX + near, y: area.midY), CGSize(width: short, height: long)),
+            .right:  zone(CGPoint(x: area.maxX - near, y: area.midY), CGSize(width: short, height: long)),
+        ]
+    }
+
+    private func nearestDock(to point: NSPoint, on screen: NSScreen) -> BarDock {
+        let zones = dockZones(on: screen)
+        return BarDock.allCases.min { a, b in
+            distance(point, zones[a]!) < distance(point, zones[b]!)
+        } ?? .bottom
+    }
+
+    private func distance(_ point: NSPoint, _ rect: CGRect) -> CGFloat {
+        hypot(point.x - rect.midX, point.y - rect.midY)
+    }
+
+    /// The bar follows the pointer, the screen dims, and the spot it would
+    /// snap to lights up.
+    private func barDragChanged() {
+        guard let panel = barPanel, let screen = NSScreen.main else { return }
+        let mouse = NSEvent.mouseLocation
+        if dragStart == nil {
+            dragStart = (mouse, panel.frame.origin)
+            pointer.isDragging = true
+            showDockTargets(on: screen)
+        }
+        guard let start = dragStart else { return }
+        panel.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x,
+                                     y: start.origin.y + mouse.y - start.mouse.y))
+        dockTargets.target = nearestDock(to: mouse, on: screen)
+    }
+
+    /// Let go: snap to the nearest spot and remember it.
+    private func barDragEnded() {
+        guard dragStart != nil, let screen = NSScreen.main else { return }
+        let dock = nearestDock(to: NSEvent.mouseLocation, on: screen)
+        dragStart = nil
+        pointer.isDragging = false
+        hideDockTargets()
+        if settings.barDock == dock {
+            placeBar(animated: true)
+        } else {
+            settings.barDock = dock
+        }
+    }
+
+    private func showDockTargets(on screen: NSScreen) {
+        let panel = targetsPanel ?? makeTargetsPanel()
+        targetsPanel = panel
+        panel.setFrame(screen.frame, display: false)
+        // The overlay draws top-down from the screen's top-left corner.
+        dockTargets.zones = dockZones(on: screen).mapValues { rect in
+            CGRect(x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY,
+                   width: rect.width, height: rect.height)
+        }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    private func hideDockTargets() {
+        guard let panel = targetsPanel else { return }
+        dockTargets.target = nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                // A new drag may have started during the fade.
+                guard self?.dragStart == nil else { return }
+                panel.orderOut(nil)
+            }
+        }
+    }
+
+    private func makeTargetsPanel() -> NSPanel {
+        let host = NSHostingView(rootView: DockTargetsView(model: dockTargets))
+        host.safeAreaRegions = []
+        let panel = PourFloatingPanel(contentRect: .zero,
+                                      styleMask: [.borderless, .nonactivatingPanel],
+                                      backing: .buffered, defer: false)
+        panel.contentView = host
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isFloatingPanel = true
+        // Just under the bar, so the bar is dragged over the dimmed screen.
+        panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 2)
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.ignoresMouseEvents = true
+        return panel
     }
 
     /// The panel lets clicks through everywhere except right over the bar, so
@@ -180,10 +315,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func pointerMoved() {
+        // Mid-drag the panel moves with the pointer and already has the mouse.
+        // SwiftUI doesn't report a cancelled drag, so a drag with the button
+        // already up is finished here instead.
+        if dragStart != nil {
+            if NSEvent.pressedMouseButtons & 1 == 0 { barDragEnded() }
+            return
+        }
         guard let panel = barPanel, panel.isVisible else { return }
-        let area = BarLayout.hitRect(isActive: session.isVisible,
-                                     isHovering: pointer.isHovering,
-                                     cardHeight: session.heldText != nil ? pointer.cardHeight ?? 190 : nil)
+        let area = BarLayout.hitRect(dock: settings.barDock, drawn: pointer.barSize)
             .offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
         let inside = area.contains(NSEvent.mouseLocation)
         if pointer.isHovering != inside { pointer.isHovering = inside }
@@ -192,7 +332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeBarPanel() -> NSPanel {
         let size = BarLayout.panelSize
-        let host = BarHostingView(rootView: BarHost(session: session, settings: settings, pointer: pointer))
+        let host = BarHostingView(rootView: BarHost(
+            session: session, settings: settings, pointer: pointer,
+            onDragChanged: { [weak self] in self?.barDragChanged() },
+            onDragEnded: { [weak self] in self?.barDragEnded() }
+        ))
         host.frame = NSRect(origin: .zero, size: size)
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
@@ -267,14 +411,17 @@ private struct BarHost: View {
     var session: PourSessionModel
     var settings: PourSettings
     var pointer: BarPointer
+    var onDragChanged: () -> Void
+    var onDragEnded: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
+        let dock = settings.barDock
+        ZStack(alignment: alignment(for: dock)) {
+            Color.clear
             PourBar(
                 isActive: session.isExpanded,
                 showsIdle: settings.showBarAlways,
-                isHovering: pointer.isHovering && !session.isVisible,
+                isHovering: pointer.isHovering && !pointer.isDragging && !session.isVisible,
                 hint: hint,
                 state: session.hudState,
                 audioLevel: Double(session.recorder.audioLevel) * 14,
@@ -283,19 +430,44 @@ private struct BarHost: View {
                 modelDownload: session.recorder.isDownloadingModel
                     ? session.recorder.downloadProgress : nil,
                 heldText: session.heldText,
+                dock: dock,
                 onCopy: { Task { await session.copyHeld() } },
                 onDismiss: { Task { await session.dismissHeld() } },
-                onCardHeight: { pointer.cardHeight = $0 }
+                onSize: { pointer.barSize = $0 }
             )
             .onTapGesture {
                 // The card has its own buttons; a click on its text does nothing.
                 guard session.heldText == nil else { return }
                 Task { await session.toggle() }
             }
-            .padding(.bottom, BarLayout.inset)
+            // Drag to move it to another edge. A few points of slack keeps a
+            // click a click.
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .onChanged { _ in onDragChanged() }
+                    .onEnded { _ in onDragEnded() }
+            )
+            .padding(edge(for: dock), BarLayout.inset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.all)
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: dock)
+    }
+
+    private func alignment(for dock: BarDock) -> Alignment {
+        switch dock {
+        case .bottom: .bottom
+        case .left:   .leading
+        case .right:  .trailing
+        }
+    }
+
+    private func edge(for dock: BarDock) -> Edge.Set {
+        switch dock {
+        case .bottom: .bottom
+        case .left:   .leading
+        case .right:  .trailing
+        }
     }
 
     private var hint: String {

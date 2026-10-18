@@ -383,7 +383,7 @@ struct SettingsPage: View {
                 }
                 Rule()
                 ToggleRow(title: "Show the bar at all times",
-                          subtitle: "A small bar above the Dock. Click it to dictate.",
+                          subtitle: "Click it to dictate. Drag it to the bottom or either side.",
                           isOn: $settings.showBarAlways)
             }
 

@@ -145,6 +145,15 @@ final class PourSettings {
         }
     }
 
+    /// Which edge the bar lives on. Changed by dragging the bar.
+    var barDock: BarDock {
+        didSet {
+            guard barDock != oldValue else { return }
+            defaults.set(barDock.rawValue, forKey: Key.barDock)
+            onBarDockChange?()
+        }
+    }
+
     /// Core Audio UID of the chosen input, `nil` for the system default.
     var microphoneUID: String? {
         didSet { defaults.set(microphoneUID, forKey: Key.microphone) }
@@ -160,6 +169,7 @@ final class PourSettings {
     var onHotKeyChange: ((HotKeyCombo) -> Void)?
     /// Installed by `AppDelegate`, which owns the bar's panel.
     var onShowBarChange: ((Bool) -> Void)?
+    var onBarDockChange: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -170,6 +180,7 @@ final class PourSettings {
         static let cleanup = "pour.cleanup"
         static let adaptTone = "pour.adaptTone"
         static let showBar = "pour.showBarAlways"
+        static let barDock = "pour.barDock"
         static let microphone = "pour.microphoneUID"
         static let language = "pour.languageID"
     }
@@ -186,6 +197,7 @@ final class PourSettings {
         self.cleanupEnabled = defaults.object(forKey: Key.cleanup) as? Bool ?? true
         self.adaptTone = defaults.object(forKey: Key.adaptTone) as? Bool ?? true
         self.showBarAlways = defaults.object(forKey: Key.showBar) as? Bool ?? true
+        self.barDock = defaults.string(forKey: Key.barDock).flatMap(BarDock.init(rawValue:)) ?? .bottom
         self.microphoneUID = defaults.string(forKey: Key.microphone)
         self.languageID = defaults.string(forKey: Key.language)
     }

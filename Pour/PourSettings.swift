@@ -145,6 +145,11 @@ final class PourSettings {
         }
     }
 
+    /// The first-run welcome has been seen through. Settings can show it again.
+    var hasOnboarded: Bool {
+        didSet { defaults.set(hasOnboarded, forKey: Key.onboarded) }
+    }
+
     /// Which edge the bar lives on. Changed by dragging the bar.
     var barDock: BarDock {
         didSet {
@@ -181,6 +186,7 @@ final class PourSettings {
         static let adaptTone = "pour.adaptTone"
         static let showBar = "pour.showBarAlways"
         static let barDock = "pour.barDock"
+        static let onboarded = "pour.onboarded"
         static let microphone = "pour.microphoneUID"
         static let language = "pour.languageID"
     }
@@ -197,6 +203,7 @@ final class PourSettings {
         self.cleanupEnabled = defaults.object(forKey: Key.cleanup) as? Bool ?? true
         self.adaptTone = defaults.object(forKey: Key.adaptTone) as? Bool ?? true
         self.showBarAlways = defaults.object(forKey: Key.showBar) as? Bool ?? true
+        self.hasOnboarded = defaults.bool(forKey: Key.onboarded)
         self.barDock = defaults.string(forKey: Key.barDock).flatMap(BarDock.init(rawValue:)) ?? .bottom
         self.microphoneUID = defaults.string(forKey: Key.microphone)
         self.languageID = defaults.string(forKey: Key.language)

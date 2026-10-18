@@ -386,6 +386,13 @@ struct SettingsPage: View {
                     }
                 }
                 Rule()
+                SettingRow(title: "Welcome tour", subtitle: "Walk through setup and the shortcut again") {
+                    Button("Show") { settings.hasOnboarded = false }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(PourTheme.accent)
+                }
+                Rule()
                 ToggleRow(title: "Show the bar at all times",
                           subtitle: "Click it to dictate. Drag it to the bottom or either side.",
                           isOn: $settings.showBarAlways)
@@ -442,7 +449,7 @@ struct SettingsPage: View {
 
 /// Hold or press once. Drawn here rather than as a system segmented control,
 /// which insists on the system accent and fights the amber.
-private struct ModePicker: View {
+struct ModePicker: View {
     @Binding var selection: ActivationMode
 
     var body: some View {

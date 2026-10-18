@@ -34,9 +34,29 @@ enum Page: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @State private var page: Page = .home
     @State private var permissions = PermissionStatus()
+    @Environment(PourSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        Group {
+            if settings.hasOnboarded {
+                main
+            } else {
+                OnboardingView(permissions: permissions) {
+                    withAnimation(.easeOut(duration: 0.25)) { settings.hasOnboarded = true }
+                }
+                .ignoresSafeArea()
+            }
+        }
+        .frame(minWidth: 780, minHeight: 540)
+        // Permissions are granted in System Settings, outside the app, so
+        // re-read them whenever Pour comes back to the foreground.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { permissions.refresh() }
+        }
+    }
+
+    private var main: some View {
         HStack(spacing: 0) {
             Sidebar(page: $page, permissions: permissions)
                 .frame(width: 208)
@@ -61,12 +81,6 @@ struct ContentView: View {
         .background(PourTheme.sidebar)
         // The sidebar runs up under the hidden titlebar, traffic lights and all.
         .ignoresSafeArea()
-        .frame(minWidth: 780, minHeight: 540)
-        // Permissions are granted in System Settings, outside the app, so
-        // re-read them whenever Pour comes back to the foreground.
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { permissions.refresh() }
-        }
     }
 }
 

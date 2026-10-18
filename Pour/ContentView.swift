@@ -4,13 +4,14 @@ import AVFoundation
 
 /// The pages in the sidebar.
 enum Page: String, CaseIterable, Identifiable {
-    case home, dictionary, style, settings
+    case home, insights, dictionary, style, settings
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .home:       "Home"
+        case .insights:   "Insights"
         case .dictionary: "Dictionary"
         case .style:      "Style"
         case .settings:   "Settings"
@@ -20,6 +21,7 @@ enum Page: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .home:       "house"
+        case .insights:   "chart.bar"
         case .dictionary: "character.book.closed"
         case .style:      "textformat"
         case .settings:   "gearshape"
@@ -42,6 +44,7 @@ struct ContentView: View {
             Group {
                 switch page {
                 case .home:       HomePage()
+                case .insights:   InsightsPage()
                 case .dictionary: DictionaryPage()
                 case .style:      StylePage()
                 case .settings:   SettingsPage(permissions: permissions)

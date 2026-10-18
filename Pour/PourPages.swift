@@ -13,7 +13,11 @@ struct HomePage: View {
 
     var body: some View {
         PageScaffold(title: greeting) {
-            tryIt
+            HStack(alignment: .top, spacing: 12) {
+                tryIt
+                StatsGlance(stats: session.stats)
+            }
+            .fixedSize(horizontal: false, vertical: true)
             recent
         }
     }

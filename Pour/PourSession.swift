@@ -10,6 +10,7 @@ final class PourSessionModel {
     let recorder = VoiceRecorderService()
     let settings = PourSettings.shared
     let history = DictationHistory()
+    let stats = DictationStats()
     private let polisher = TranscriptPolisher()
     var phase: Phase = .idle
 
@@ -25,6 +26,15 @@ final class PourSessionModel {
 
     /// A release that arrived before recording had started.
     private var finishWhenReady = false
+
+    /// Hold mode, hands-free: a double tap of the shortcut keeps listening
+    /// after the keys come up, until the next press.
+    private(set) var isLocked = false
+    private var lastPress: Date?
+    /// The end of a short tap, held back in case a second tap follows.
+    private var pendingRelease: Task<Void, Never>?
+    private static let tapLength: TimeInterval = 0.3
+    private static let doubleTapGap: Duration = .milliseconds(350)
 
     /// Installed by `AppDelegate`, which owns the floating panel. Both the
     /// global hotkey and the in-app "Try it" button drive the same path.
@@ -69,11 +79,44 @@ final class PourSessionModel {
     /// The shortcut went down. Hold mode starts here; press-once mode starts
     /// or finishes, depending on whether a dictation is already running.
     func shortcutPressed() async {
-        if settings.activation == .toggle { await toggle() } else { await begin() }
+        if settings.activation == .toggle {
+            await toggle()
+            return
+        }
+        let running = phase == .summoning || phase == .listening || phase == .transcribing
+        if isLocked {
+            if running {
+                await end()
+                return
+            }
+            // The locked dictation ended some other way; start afresh.
+            isLocked = false
+        }
+        if let pending = pendingRelease {
+            // The second tap of a double tap: keep listening, if there is
+            // still something to keep.
+            pending.cancel()
+            pendingRelease = nil
+            if running { isLocked = true }
+            return
+        }
+        lastPress = .now
+        await begin()
     }
 
     func shortcutReleased() async {
-        guard settings.activation == .hold else { return }
+        guard settings.activation == .hold, !isLocked else { return }
+        // A short tap may be the first half of a double tap, so wait a moment
+        // for the second before finishing.
+        if let lastPress, Date().timeIntervalSince(lastPress) < Self.tapLength {
+            pendingRelease = Task {
+                try? await Task.sleep(for: Self.doubleTapGap)
+                guard !Task.isCancelled else { return }
+                pendingRelease = nil
+                await end()
+            }
+            return
+        }
         await end()
     }
 
@@ -89,6 +132,7 @@ final class PourSessionModel {
 
     /// Start listening, with the bar on screen.
     func begin() async {
+        isLocked = false
         // A new dictation replaces a transcript still waiting to be copied.
         if phase == .holding {
             holdTask?.cancel()
@@ -173,6 +217,7 @@ final class PourSessionModel {
             return
         }
         guard phase == .listening || phase == .transcribing else { return }
+        isLocked = false
         phase = .polishing
 
         // stopRecording() waits for the analyzer to drain so the last words
@@ -180,7 +225,9 @@ final class PourSessionModel {
         let started = Date()
         await recorder.stopRecording()
 
-        var final = recorder.finalTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let heard = recorder.finalTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
+        var final = heard
+        let app = NSWorkspace.shared.frontmostApplication
 
         // The phase is named for this. Fails open — `polish` returns the input
         // unchanged on any error, unavailability or timeout.
@@ -198,7 +245,9 @@ final class PourSessionModel {
         if final.isEmpty {
             outcome = .nothingHeard
         } else {
-            history.add(final, app: NSWorkspace.shared.frontmostApplication?.localizedName)
+            history.add(final, app: app?.localizedName)
+            stats.record(raw: heard, final: final, seconds: recorder.recordingDuration,
+                         bundleID: app?.bundleIdentifier, vocabulary: settings.vocabulary)
             if TextFocus.current() == .notEditable {
                 hold(final)
                 return
@@ -229,6 +278,9 @@ final class PourSessionModel {
 
     /// Shrink the bar back to rest, then stand down.
     private func collapse() async {
+        isLocked = false
+        pendingRelease?.cancel()
+        pendingRelease = nil
         phase = .dismissing
         try? await Task.sleep(for: .milliseconds(320))
         phase = .idle

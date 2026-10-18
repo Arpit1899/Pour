@@ -93,7 +93,7 @@ enum ActivationMode: String, Codable, CaseIterable {
 
     var detail: String {
         switch self {
-        case .hold:   "Speak while the keys are down"
+        case .hold:   "Speak while the keys are down. Double-tap to keep listening"
         case .toggle: "Press once to start, again to finish"
         }
     }

@@ -21,8 +21,11 @@ enum BarLayout {
     static let inset: CGFloat = 22
     /// From the Dock, or the screen edge, to the bar.
     static let lift: CGFloat = 10
-    /// The bar's thickness while it listens.
+    /// The pill's thickness while it shows a message.
     static let thickness: CGFloat = 34
+    /// The band along the docked edge that every state centres on, as deep
+    /// as the listening ribbons, so they open out of the resting line in place.
+    static let depth: CGFloat = 56
 
     static let cardWidth: CGFloat = 360
 
@@ -37,10 +40,11 @@ enum BarLayout {
     }
 
     private static func place(_ size: CGSize, dock: BarDock) -> CGRect {
+        let centring = max(0, (depth - (dock.isVertical ? size.width : size.height)) / 2)
         let origin: CGPoint = switch dock {
-        case .bottom: CGPoint(x: (panelSize.width - size.width) / 2, y: inset)
-        case .left:   CGPoint(x: inset, y: (panelSize.height - size.height) / 2)
-        case .right:  CGPoint(x: panelSize.width - inset - size.width,
+        case .bottom: CGPoint(x: (panelSize.width - size.width) / 2, y: inset + centring)
+        case .left:   CGPoint(x: inset + centring, y: (panelSize.height - size.height) / 2)
+        case .right:  CGPoint(x: panelSize.width - inset - centring - size.width,
                               y: (panelSize.height - size.height) / 2)
         }
         return CGRect(origin: origin, size: size)
@@ -60,9 +64,9 @@ final class BarPointer {
 // MARK: - The bar
 
 /// Pour's dictation bar, docked at the bottom of the screen or standing up on
-/// either side. At rest it is a sliver; while you speak it opens into a warm
-/// aurora and nothing else, because the words can't be changed mid-sentence
-/// anyway — they arrive when you let go.
+/// either side. At rest it is a short line; while you speak it opens into
+/// warm ribbons of light and nothing else, because the words can't be changed
+/// mid-sentence anyway — they arrive when you let go. Only words get a pill.
 struct PourBar: View {
     /// A session is on screen. False while summoning and dismissing, so the
     /// bar grows out of, and settles back into, its resting shape.
@@ -74,6 +78,7 @@ struct PourBar: View {
     var hint: String
     var state: PourState
     var audioLevel: Double
+    var spectrum: VoiceSpectrum = .silent
     var outcome: PourOutcome
     var errorMessage: String?
     /// Fraction complete while a speech model installs, `nil` otherwise. The
@@ -91,7 +96,13 @@ struct PourBar: View {
         case message(symbol: String?, text: String)
         case card(String)
 
-        var isLive: Bool { self == .wave || self == .thinking }
+        /// Words sit on a pill; the line and the ribbons float free.
+        var hasPill: Bool {
+            switch self {
+            case .hidden, .rest, .wave, .thinking: false
+            case .hint, .message, .card: true
+            }
+        }
     }
 
     private var mode: Mode {
@@ -125,7 +136,7 @@ struct PourBar: View {
     private var size: (width: CGFloat?, height: CGFloat?) {
         let along: (CGFloat, CGFloat)? = switch mode {
         case .hidden, .rest:   (40, 8)
-        case .wave, .thinking: (150, BarLayout.thickness)
+        case .wave, .thinking: (PourRibbons.length, BarLayout.depth)
         default:               nil
         }
         if let along {
@@ -146,9 +157,6 @@ struct PourBar: View {
         return RoundedRectangle(cornerRadius: short / 2, style: .continuous)
     }
 
-    /// Louder speech reads as a bigger change than the raw level suggests.
-    private var level: Double { min(1, audioLevel).squareRoot() }
-
     private var anchor: UnitPoint {
         switch dock {
         case .bottom: .bottom
@@ -161,12 +169,22 @@ struct PourBar: View {
         content
             .frame(width: size.width, height: size.height)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
-            .background { background }
-            .clipShape(shape)
-            .overlay { if mode.isLive { AuroraRim(level: mode == .wave ? level : 0.2, shape: shape) } }
+            .background { if mode.hasPill { background } }
             .contentShape(shape)
             .opacity(mode == .hidden ? 0 : 1)
             .scaleEffect(mode == .hidden ? 0.6 : 1, anchor: anchor)
+            .frame(minWidth: dock.isVertical ? BarLayout.depth : nil,
+                   minHeight: dock.isVertical ? nil : BarLayout.depth)
+            // Behind the pill, at a fixed size on the centre line, so the
+            // ribbons grow out of the resting line instead of being swapped in.
+            .background {
+                PourRibbons(isOpen: mode == .wave || mode == .thinking,
+                            level: audioLevel, spectrum: spectrum, thinking: mode == .thinking)
+                    .frame(width: dock.isVertical ? BarLayout.depth : PourRibbons.length,
+                           height: dock.isVertical ? PourRibbons.length : BarLayout.depth)
+                    .opacity(mode == .hidden ? 0 : 1)
+                    .allowsHitTesting(false)
+            }
             .animation(.spring(response: 0.38, dampingFraction: 0.78), value: mode)
             .animation(.spring(response: 0.45, dampingFraction: 0.8), value: dock)
     }
@@ -174,7 +192,8 @@ struct PourBar: View {
     @ViewBuilder
     private var content: some View {
         switch mode {
-        case .hidden, .rest:
+        case .hidden, .rest, .wave, .thinking:
+            // Drawn by the ribbons behind; this only sizes what takes clicks.
             Color.clear
         case .hint:
             Text(hint)
@@ -182,9 +201,6 @@ struct PourBar: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .fixedSize()
                 .padding(.horizontal, 14)
-                .transition(.opacity)
-        case .wave, .thinking:
-            PourAurora(level: level, thinking: mode == .thinking)
                 .transition(.opacity)
         case .message(let symbol, let text):
             HStack(spacing: 7) {
@@ -204,10 +220,9 @@ struct PourBar: View {
     }
 
     private var background: some View {
-        let resting = mode == .rest || mode == .hidden
-        return ZStack {
-            shape.fill(.black.opacity(resting ? 0.4 : 0.9))
-            shape.strokeBorder(.white.opacity(resting ? 0.3 : 0.1), lineWidth: 0.5)
+        ZStack {
+            shape.fill(.black.opacity(0.9))
+            shape.strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
         }
     }
 }
@@ -276,82 +291,133 @@ private struct CountdownRing: View {
     }
 }
 
-/// The light running round the rim while the bar listens: the glow colors
-/// turning slowly, a soft halo outside and a fine line on the edge, both
-/// brighter when you speak louder.
-private struct AuroraRim: View {
-    var level: Double
-    var shape: RoundedRectangle
+// MARK: - The ribbons
 
-    var body: some View {
-        TimelineView(.animation) { context in
-            let angle = context.date.timeIntervalSinceReferenceDate * 52
-            let ring = AngularGradient(colors: PourTheme.glow, center: .center,
-                                       angle: .degrees(angle.truncatingRemainder(dividingBy: 360)))
-            ZStack {
-                shape.stroke(ring, lineWidth: 4)
-                    .blur(radius: 5)
-                    .opacity(0.3 + 0.5 * level)
-                shape.strokeBorder(ring, lineWidth: 1.2)
-                    .opacity(0.55 + 0.4 * level)
-            }
-            .blendMode(.plusLighter)
-        }
-        .animation(.easeOut(duration: 0.18), value: level)
-        .allowsHitTesting(false)
-    }
-}
-
-// MARK: - The aurora
-
-/// Carried between frames: the eased level and the aurora's own clock. A
+/// Carried between frames: the eased bands and the ribbons' own clocks. A
 /// class so the canvas can update it while drawing without causing a view
 /// update.
-private final class AuroraMotion {
+private final class RibbonMotion {
     var level: Double = 0
+    var bands = SIMD4<Double>(repeating: 0)
+    var phase: Double = 0
     var clock: Double = 0
     var lastTime: TimeInterval?
 }
 
-/// Soft fields of warm color drifting along the bar, brighter and taller as
-/// you speak. `thinking` keeps them dim and quick while the transcript is
-/// being tidied. Runs along the long side, so it works standing up too.
-struct PourAurora: View {
+/// The resting line and, while you speak, translucent ribbons of ember, rose,
+/// amber and honey mirrored about it, each swelling with its own part of your
+/// voice: low vowels swell ember, the middle drives rose and amber, and "s",
+/// "t" and "sh" flash honey. One drawing, so opening stretches the line out
+/// from where it rests and the ribbons rise out of it. `thinking` keeps them
+/// low and quick while the transcript is being tidied. Runs along the long
+/// side, so it works standing up too.
+struct PourRibbons: View {
+    /// Listening or tidying. Closed, it is the resting line and stays still.
+    var isOpen: Bool
     var level: Double
+    var spectrum: VoiceSpectrum
     var thinking: Bool
 
-    @State private var motion = AuroraMotion()
+    /// The canvas length, with room past the ribbons for their soft shade.
+    static let length: CGFloat = 250
 
-    private struct Field {
-        var color: Color
-        var speed: Double
-        var phase: Double
+    @State private var motion = RibbonMotion()
+
+    var body: some View {
+        // Paused at rest, so the resting line costs nothing between dictations.
+        TimelineView(.animation(paused: !isOpen)) { context in
+            RibbonCanvas(openness: isOpen ? 1 : 0,
+                         now: context.date.timeIntervalSinceReferenceDate,
+                         level: level, spectrum: spectrum, thinking: thinking, motion: motion)
+        }
+        .animation(isOpen ? .easeOut(duration: 0.45) : .easeInOut(duration: 0.35), value: isOpen)
+        // One layer, so the additive colour stays inside the ribbons.
+        .drawingGroup()
+        .accessibilityHidden(true)
+    }
+}
+
+/// Redrawn on every frame while open, and on every step of opening and
+/// closing through `openness`, which SwiftUI animates.
+private struct RibbonCanvas: View, Animatable {
+    var openness: Double
+    var now: TimeInterval
+    var level: Double
+    var spectrum: VoiceSpectrum
+    var thinking: Bool
+    var motion: RibbonMotion
+
+    var animatableData: Double {
+        get { openness }
+        set { openness = newValue }
     }
 
-    private static let fields: [Field] = [
-        Field(color: PourTheme.ember,  speed: 0.33, phase: 0),
-        Field(color: PourTheme.rose,   speed: 0.27, phase: 2.1),
-        Field(color: PourTheme.honey,  speed: 0.41, phase: 4.2),
-        Field(color: PourTheme.accent, speed: 0.22, phase: 1),
+    /// A warm near-black under the line and ribbons. It sinks into a dark
+    /// wallpaper and gives the colour an edge on a white window, without
+    /// showing as a shape.
+    private static let shade = Color(red: 0.10, green: 0.06, blue: 0.03)
+    private static let resting: Double = 40
+    private static let drawn: Double = 210
+    /// Peak distance from the centre line at full voice.
+    private static let reach: Double = 22
+
+    /// Each ribbon is a few soft lumps drifting along the line.
+    private struct Lump { var start, drift, speed, phase, width, weight: Double }
+    private struct Ribbon { var color: Color; var band: Int; var lumps: [Lump] }
+
+    private static let ribbons: [Ribbon] = [
+        Ribbon(color: PourTheme.ember, band: 0, lumps: [
+            Lump(start: -0.45, drift: 0.45, speed: 0.31, phase: 0, width: 0.55, weight: 1),
+            Lump(start: 0.6, drift: 0.35, speed: 0.23, phase: 2, width: 0.42, weight: 0.65)]),
+        Ribbon(color: PourTheme.rose, band: 1, lumps: [
+            Lump(start: 0.2, drift: 0.5, speed: 0.27, phase: 1.1, width: 0.5, weight: 1),
+            Lump(start: -0.85, drift: 0.3, speed: 0.19, phase: 3.3, width: 0.4, weight: 0.6)]),
+        Ribbon(color: PourTheme.accent, band: 2, lumps: [
+            Lump(start: -0.15, drift: 0.55, speed: 0.36, phase: 4, width: 0.42, weight: 0.95),
+            Lump(start: 0.85, drift: 0.3, speed: 0.29, phase: 5.2, width: 0.36, weight: 0.6)]),
+        Ribbon(color: PourTheme.honey, band: 3, lumps: [
+            Lump(start: 0.35, drift: 0.6, speed: 0.43, phase: 2.7, width: 0.32, weight: 0.85),
+            Lump(start: -0.55, drift: 0.4, speed: 0.5, phase: 0.6, width: 0.3, weight: 0.55)]),
     ]
 
     var body: some View {
-        TimelineView(.animation) { context in
-            Canvas { ctx, size in
-                let now = context.date.timeIntervalSinceReferenceDate
-                let dt = motion.lastTime.map { min(0.1, max(0, now - $0)) } ?? 0
-                motion.lastTime = now
-                // Silence still glows faintly; a dark bar reads as "not listening".
-                let target = thinking ? 0.2 : max(0.12, level)
-                motion.level += (target - motion.level) * (1 - exp(-dt * 10))
-                motion.clock += dt * (thinking ? 3 : 1)
-                draw(in: &ctx, size: size, level: motion.level, clock: motion.clock)
-            }
+        Canvas { ctx, size in
+            let dt = motion.lastTime.map { min(0.1, max(0, now - $0)) } ?? 0
+            motion.lastTime = now
+            step(dt: dt)
+            draw(in: &ctx, size: size)
         }
-        .accessibilityHidden(true)
     }
 
-    private func draw(in ctx: inout GraphicsContext, size: CGSize, level: Double, clock: Double) {
+    private func step(dt: Double) {
+        // Fully closed: start the next dictation from silence.
+        guard openness > 0.01 else {
+            motion.level = 0
+            motion.bands = .zero
+            return
+        }
+        let target = thinking ? 0.2 : min(1, level)
+        motion.level += (target - motion.level) * (1 - exp(-dt * (target > motion.level ? 12 : 4.5)))
+        for i in 0..<4 {
+            let band = thinking ? 0.3 : Double(spectrum.bands[i])
+            // Hiss is short, so honey rises fast; everything settles slowly.
+            let rising = band > motion.bands[i]
+            let rate = rising ? (i == 3 ? 22.0 : 12.0) : (i == 3 ? 6.0 : 4.5)
+            motion.bands[i] += (band - motion.bands[i]) * (1 - exp(-dt * rate))
+        }
+        // Calm: the ribbons drift slowly in silence and only a little faster
+        // when loud.
+        let pace = thinking ? 3.0 : 1.0
+        motion.phase += dt * pace * (1.6 + 3.4 * pow(motion.level, 1.4))
+        motion.clock += dt * pace
+    }
+
+    /// Siri's taper: 1 in the middle, nearly 0 at x = ±2.
+    private static func taper(_ x: Double) -> Double {
+        pow(4 / (4 + pow(x, 4)), 4)
+    }
+
+    private func draw(in ctx: inout GraphicsContext, size: CGSize) {
         var length = size.width, depth = size.height
         if size.height > size.width {
             // Standing up: draw the same thing turned a quarter.
@@ -359,16 +425,77 @@ struct PourAurora: View {
             ctx.rotate(by: .degrees(90))
             swap(&length, &depth)
         }
-        ctx.blendMode = .plusLighter
-        ctx.addFilter(.blur(radius: 6.5))
-        for field in Self.fields {
-            let cx = length * (0.5 + 0.48 * sin(clock * field.speed + field.phase))
-            let cy = depth * (0.5 + 0.25 * sin(clock * field.speed * 1.7 + field.phase))
-            let rx = length * 0.32
-            let ry = depth * (0.55 + 0.35 * level)
-            ctx.fill(Path(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2)),
-                     with: .color(field.color.opacity(0.25 + 0.6 * level)))
+        let open = openness
+        let span = Self.resting + (Self.drawn - Self.resting) * open
+        let x0 = (length - span) / 2, mid = depth / 2
+        // The line reaches out first; the ribbons rise once it has.
+        let rise = open * open
+        let shapes = Self.ribbons.map { path(for: $0, x0: x0, span: span, mid: mid, rise: rise) }
+        var line = Path()
+        line.move(to: CGPoint(x: x0, y: mid))
+        line.addLine(to: CGPoint(x: x0 + span, y: mid))
+        let loud = min(1, motion.bands.max() * 1.2)
+
+        ctx.drawLayer { shade in
+            shade.addFilter(.blur(radius: 4))
+            for shape in shapes { shade.fill(shape, with: .color(Self.shade.opacity(0.07 * rise))) }
+            shade.stroke(line, with: fade(Self.shade, 0.2, x0: x0, span: span), lineWidth: 5)
         }
+        // The amber line stays through opening, only thinning, so it never
+        // fades out and snaps back; added light alone barely shows on a light
+        // wallpaper.
+        ctx.stroke(line, with: fade(PourTheme.accent, 0.85 - 0.2 * open, x0: x0, span: span),
+                   style: StrokeStyle(lineWidth: 2 - 0.6 * open, lineCap: .round))
+        ctx.blendMode = .plusLighter
+        for (ribbon, shape) in zip(Self.ribbons, shapes) {
+            let energy = min(1, motion.bands[ribbon.band] * 3)
+            ctx.fill(shape, with: .color(ribbon.color.opacity(0.4 * rise)))
+            ctx.stroke(shape, with: fade(ribbon.color, 0.4 * energy * rise, x0: x0, span: span),
+                       lineWidth: 0.6)
+        }
+        ctx.stroke(line, with: fade(PourTheme.honey, (0.3 + 0.5 * loud) * open, x0: x0, span: span),
+                   lineWidth: 1)
+    }
+
+    /// One ribbon, mirrored above and below the line.
+    private func path(for ribbon: Ribbon, x0: Double, span: Double, mid: Double, rise: Double) -> Path {
+        let steps = 90
+        let energy = pow(max(0, motion.bands[ribbon.band]), 1.3) * rise
+        var top: [CGPoint] = [], bottom: [CGPoint] = []
+        for i in 0...steps {
+            let u = Double(i) / Double(steps), x = -2 + 4 * u
+            var height = 0.0
+            for lump in ribbon.lumps {
+                let centre = lump.start + lump.drift * sin(motion.clock * lump.speed + lump.phase)
+                let q = (x - centre) / lump.width
+                height += lump.weight / ((1 + q * q) * (1 + q * q))
+            }
+            height *= energy * Self.taper(x * 0.8)
+                * (0.85 + 0.15 * sin(4 * x - motion.phase + Double(ribbon.band)))
+            height = min(1, height) * Self.reach
+            top.append(CGPoint(x: x0 + u * span, y: mid - height))
+            bottom.append(CGPoint(x: x0 + u * span, y: mid + height))
+        }
+        var path = Path()
+        path.addLines(top)
+        for point in bottom.reversed() { path.addLine(to: point) }
+        path.closeSubpath()
+        return path
+    }
+
+    /// Fades both ends, so the overlapping strokes don't add up to bright tips.
+    private func fade(_ color: Color, _ alpha: Double, x0: Double, span: Double,
+                      edge: Double = 0.3) -> GraphicsContext.Shading {
+        .linearGradient(Gradient(stops: [
+            .init(color: color.opacity(0), location: 0),
+            .init(color: color.opacity(0.1 * alpha), location: edge * 0.4),
+            .init(color: color.opacity(0.5 * alpha), location: edge * 0.72),
+            .init(color: color.opacity(alpha), location: edge),
+            .init(color: color.opacity(alpha), location: 1 - edge),
+            .init(color: color.opacity(0.5 * alpha), location: 1 - edge * 0.72),
+            .init(color: color.opacity(0.1 * alpha), location: 1 - edge * 0.4),
+            .init(color: color.opacity(0), location: 1),
+        ]), startPoint: CGPoint(x: x0, y: 0), endPoint: CGPoint(x: x0 + span, y: 0))
     }
 }
 

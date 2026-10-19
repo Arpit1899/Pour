@@ -309,6 +309,7 @@ struct SettingsPage: View {
     @State private var automaticLanguage: Locale?
     @Environment(\.scenePhase) private var scenePhase
     @State private var loginItem = LoginItem()
+    @State private var updater = Updater.shared
 
     var body: some View {
         @Bindable var settings = settings
@@ -396,6 +397,12 @@ struct SettingsPage: View {
                 ToggleRow(title: "Show the bar at all times",
                           subtitle: "Click it to dictate. Drag it to the bottom or either side.",
                           isOn: $settings.showBarAlways)
+                Rule()
+                ToggleRow(title: "Show in Dock",
+                          subtitle: "When off, Pour lives in the menu bar",
+                          isOn: $settings.showInDock)
+                Rule()
+                UpdateRow(updater: updater)
             }
 
             CardSection("Permissions", action: ("Re-check", permissions.refresh)) {
@@ -444,6 +451,59 @@ struct SettingsPage: View {
         microphones = AudioInputDevices.all()
         defaultMicrophone = AudioInputDevices.defaultInput?.name
         loginItem.refresh()
+        updater.checkIfDue()
+    }
+}
+
+/// Checks GitHub when Settings opens; Update downloads, swaps and relaunches.
+private struct UpdateRow: View {
+    var updater: Updater
+
+    var body: some View {
+        SettingRow(title: "Updates", subtitle: subtitle,
+                   subtitleColor: isFailed ? PourTheme.accent : .secondary) {
+            switch updater.state {
+            case .idle, .checking:
+                ProgressView().controlSize(.small)
+            case .upToDate:
+                link("Check") { await updater.check() }
+            case .available:
+                Button("Update") { Task { await updater.install() } }
+                    .buttonStyle(AmberPill())
+            case .downloading(_, let progress):
+                ProgressView(value: progress)
+                    .tint(PourTheme.accent)
+                    .frame(width: 80)
+            case .installing:
+                ProgressView().controlSize(.small)
+            case .failed:
+                link("Try again") { await updater.check() }
+            }
+        }
+    }
+
+    private var subtitle: String {
+        let current = updater.currentVersion
+        switch updater.state {
+        case .idle, .checking:          return "Pour \(current), checking for updates…"
+        case .upToDate:                 return "Pour \(current) is the latest"
+        case .available(let version):   return "Pour \(version) is out. You have \(current)"
+        case .downloading(let version, _): return "Downloading Pour \(version)…"
+        case .installing:               return "Restarting Pour…"
+        case .failed(let message):      return message
+        }
+    }
+
+    private var isFailed: Bool {
+        if case .failed = updater.state { return true }
+        return false
+    }
+
+    private func link(_ title: String, action: @escaping () async -> Void) -> some View {
+        Button(title) { Task { await action() } }
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(PourTheme.accent)
     }
 }
 

@@ -72,6 +72,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(PourTheme.canvas, in: .rect(cornerRadius: 12, style: .continuous))
+            .clipShape(.rect(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(PourTheme.hairline, lineWidth: 0.5)

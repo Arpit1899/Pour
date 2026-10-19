@@ -11,6 +11,7 @@ final class VoiceRecorderService {
     var finalTranscription = ""
     var recordingDuration: TimeInterval = 0
     var audioLevel: Float = 0
+    var spectrum = VoiceSpectrum.silent
     var error: String?
     var isDownloadingModel = false
     var downloadProgress: Double = 0
@@ -221,11 +222,16 @@ final class VoiceRecorderService {
         // whose format disagrees with the hardware crashes the engine. The
         // converter is built from the first buffer that actually arrives.
         let resampler = Resampler(target: format)
+        let analyzer = VoiceSpectrumAnalyzer()
 
         // Small buffers, so stopping drops at most a few milliseconds.
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
             let level = Self.meanLevel(of: buffer)
-            Task { @MainActor in self?.audioLevel = level }
+            let spectrum = analyzer.analyze(buffer)
+            Task { @MainActor in
+                self?.audioLevel = level
+                self?.spectrum = spectrum
+            }
             if let converted = resampler.convert(buffer) {
                 continuation.yield(AnalyzerInput(buffer: converted))
             }
@@ -251,6 +257,7 @@ final class VoiceRecorderService {
         isRecording = false
         timer?.invalidate(); timer = nil
         audioLevel = 0
+        spectrum = .silent
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine = nil

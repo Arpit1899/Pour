@@ -6,7 +6,7 @@ struct PourApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: PourMenu.windowID) {
             ContentView()
                 .environment(appDelegate.session)
                 .environment(appDelegate.settings)
@@ -15,6 +15,62 @@ struct PourApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 900, height: 620)
+
+        // Taking the item out of the menu bar by hand puts Pour back in the
+        // Dock, so there is always a way to open it.
+        MenuBarExtra(isInserted: Binding(
+            get: { !appDelegate.settings.showInDock },
+            set: { appDelegate.settings.showInDock = !$0 }
+        )) {
+            PourMenu(settings: appDelegate.settings)
+        } label: {
+            Image(nsImage: PourMenu.icon)
+        }
+    }
+}
+
+/// The menu bar item, shown while Pour is kept out of the Dock.
+struct PourMenu: View {
+    static let windowID = "main"
+
+    /// The glass alone, as a template so the menu bar tints it.
+    static let icon: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(cgPath: PourGlassShape().path(in: rect).cgPath).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    var settings: PourSettings
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Text(hint)
+        Button("Open Pour", action: open)
+        Divider()
+        Button("Quit Pour") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
+    }
+
+    private var hint: String {
+        let keys = settings.hotKey.displayString
+        switch settings.activation {
+        case .hold:   return "Hold \(keys) to dictate"
+        case .toggle: return "Press \(keys) to dictate"
+        }
+    }
+
+    private func open() {
+        // The bar's panels can't become main, so this finds the window.
+        if let window = NSApp.windows.first(where: \.canBecomeMain) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(id: Self.windowID)
+        }
+        NSApp.activate()
     }
 }
 
@@ -50,6 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Where the pointer and the panel were when a drag began.
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Before the window opens, so a Dock icon doesn't flash up first.
+        applyDockPolicy()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Build the panel up front so the first hotkey press doesn't pay for
         // constructing it.
@@ -76,6 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settings.onShowBarChange = { [weak self] _ in self?.updateRestingBar() }
         settings.onBarDockChange = { [weak self] in self?.placeBar(animated: true) }
+        settings.onShowInDockChange = { [weak self] _ in
+            self?.applyDockPolicy()
+            // Leaving the Dock deactivates the app; keep the window in front.
+            NSApp.activate()
+        }
 
         // The Dock can grow, shrink or move, and displays come and go.
         NotificationCenter.default.addObserver(
@@ -103,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stay alive after the window closes so the hotkey keeps working.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    private func applyDockPolicy() {
+        NSApp.setActivationPolicy(settings.showInDock ? .regular : .accessory)
     }
 
     // MARK: - The bar
@@ -166,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// where the listening bar sits in that dock.
     private func dockZones(on screen: NSScreen) -> [BarDock: CGRect] {
         let area = screen.visibleFrame
-        let near = BarLayout.lift + BarLayout.thickness / 2
+        let near = BarLayout.lift + BarLayout.depth / 2
         let long: CGFloat = 180, short: CGFloat = 60
         func zone(_ center: CGPoint, _ size: CGSize) -> CGRect {
             CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
@@ -425,6 +495,7 @@ private struct BarHost: View {
                 hint: hint,
                 state: session.hudState,
                 audioLevel: Double(session.recorder.audioLevel) * 14,
+                spectrum: session.recorder.spectrum,
                 outcome: session.outcome,
                 errorMessage: session.phase == .error ? "Microphone unavailable" : nil,
                 modelDownload: session.recorder.isDownloadingModel

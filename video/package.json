@@ -1,0 +1,20 @@
+{
+  "name": "pour-video",
+  "private": true,
+  "scripts": {
+    "fonts": "mkdir -p public/fonts && cp /System/Library/Fonts/SFNS.ttf /System/Library/Fonts/NewYork.ttf public/fonts/",
+    "studio": "remotion studio",
+    "render": "remotion render Pour out/pour.mp4",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.536",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.536"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "7.0.2"
+  }
+}

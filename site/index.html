@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pour, dictation for macOS</title>
+<meta name="description" content="Push-to-talk dictation for macOS. Hold a shortcut, speak, let go, and the words are typed into the app you're using. Runs entirely on your Mac. Free and open source.">
+<meta property="og:title" content="Pour, dictation for macOS">
+<meta property="og:description" content="Hold a key, speak, let go. Your words are typed into any app, and nothing leaves your Mac.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#FCFBF9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#19191A" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="mark.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#top" aria-label="Pour, home">
+      <img src="mark.svg" alt="" width="26" height="26">
+      <span class="wordmark">pour<span class="dot">.</span></span>
+    </a>
+    <nav class="nav">
+      <a href="#features">Features</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#install">Install</a>
+      <a class="pill" href="https://github.com/Arpit1899/Pour">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero wrap">
+    <img class="app-icon" src="icon.png" alt="Pour app icon" width="112" height="112">
+    <h1>Hold a key. Say it.<br>It's typed.</h1>
+    <p class="lede">Push-to-talk dictation for macOS. Hold <kbd>⌃</kbd><kbd>Space</kbd>, speak, let go, and the words are typed into whatever app you were using. Speech recognition and cleanup run on your Mac, so nothing you say leaves it.</p>
+    <div class="actions">
+      <a class="button primary" href="Pour.dmg" download>
+        <svg aria-hidden="true" viewBox="0 0 16 16" width="15" height="15"><path d="M8 1.5v9M4 7l4 4 4-4M2.5 14h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Download for Mac
+      </a>
+      <a class="button" href="https://github.com/Arpit1899/Pour">View on GitHub</a>
+    </div>
+    <p class="meta">Version 1.0 · 1.6 MB · macOS 26 or later · Free and open source, MIT</p>
+
+    <figure class="showcase">
+      <div class="stage" role="img" aria-label="Pour's dictation bar glowing above the Dock while it listens">
+      <div class="window" aria-hidden="true">
+        <div class="window-bar"><i></i><i></i><i></i></div>
+        <p class="typed">Can we move the review to Thursday? I'd like the team to see the new numbers first<span class="caret"></span></p>
+      </div>
+      <div class="bar-wrap" aria-hidden="true">
+        <div class="rim-glow"></div>
+        <div class="bar">
+          <div class="fields">
+            <span class="f f1"></span><span class="f f2"></span><span class="f f3"></span><span class="f f4"></span>
+          </div>
+        </div>
+      </div>
+      <div class="dock" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <figcaption>While you hold the shortcut, the bar above the Dock glows. Let go and the text appears where your cursor is.</figcaption>
+    </figure>
+  </section>
+
+  <section class="steps wrap">
+    <h2 class="visually-hidden">How it works</h2>
+    <ol>
+      <li><span class="n">1</span><h3>Hold <kbd>⌃</kbd><kbd>Space</kbd></h3><p>Or double-tap it to keep listening hands-free. You can change the shortcut.</p></li>
+      <li><span class="n">2</span><h3>Speak</h3><p>The bar glows amber while it listens. Talk the way you normally would.</p></li>
+      <li><span class="n">3</span><h3>Let go</h3><p>The words are typed into the app you were using: mail, chat, notes, a browser.</p></li>
+    </ol>
+  </section>
+
+  <section id="features" class="wrap section">
+    <h2>What it does</h2>
+    <div class="grid">
+      <article class="card">
+        <h3>Hold or press once</h3>
+        <p>Hold <kbd>⌃</kbd><kbd>Space</kbd> while you talk. Double-tap it to keep listening after you let go, and press it again to finish. Or switch to press once to start and again to stop. Pick any shortcut you like.</p>
+      </article>
+      <article class="card">
+        <h3>A small bar on screen</h3>
+        <p>It sits above the Dock, or on either side of the screen if you drag it there. Click it to start or stop a dictation.</p>
+      </article>
+      <article class="card">
+        <h3>Tidy text</h3>
+        <p>With Apple Intelligence on, an on-device model adds punctuation and capitals and drops filler words, without rewording what you said. It can match the app: casual in chat, formal in mail, left alone in code editors and terminals.</p>
+      </article>
+      <article class="card">
+        <h3>Nowhere to paste?</h3>
+        <p>If nothing you can type into is focused, the text waits in a card with a Copy button instead of being lost.</p>
+      </article>
+      <article class="card">
+        <h3>Your words, spelled right</h3>
+        <p>Add names, acronyms and jargon to the Dictionary and the recogniser leans toward them. Pick the language and the microphone in Settings.</p>
+      </article>
+      <article class="card">
+        <h3>Insights</h3>
+        <p>See your words per minute next to typing speed, the fixes cleanup and the Dictionary made, the typing time you saved, the kinds of app you dictate into, and a streak grid. Home shows a quick glance and your recent dictations to copy again.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="privacy" class="wrap section privacy">
+    <img src="mark.svg" alt="" width="44" height="44">
+    <div>
+      <h2>Nothing leaves your Mac</h2>
+      <p>Speech recognition uses Apple's on-device speech model, and cleanup uses the on-device Apple Intelligence model. Pour has no account and no server, and it sends no analytics. No audio or text leaves your Mac.</p>
+      <p>Recent dictations are saved in <code>~/Library/Application Support/Pour/history.json</code> so they appear on the Home page. You can clear them from Home at any time. Insights keeps daily counts next to them in <code>stats.json</code>, never the text itself.</p>
+    </div>
+  </section>
+
+  <section id="install" class="wrap section">
+    <h2>Install</h2>
+    <div class="grid two">
+      <article class="card">
+        <h3>First open</h3>
+        <ol class="list">
+          <li>Open <b>Pour.dmg</b> and drag Pour into Applications.</li>
+          <li>Open Pour. macOS says it can't verify the app. Click <b>Done</b>.</li>
+          <li>Open <b>System Settings</b>, go to <b>Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to the message about Pour. Confirm with your password.</li>
+        </ol>
+        <p class="note">Pour isn't notarized by Apple yet, so macOS asks you to confirm once. Right-clicking and choosing Open no longer skips this check on recent macOS.</p>
+        <details>
+          <summary>Prefer Terminal?</summary>
+          <p>This removes the download flag so Pour opens normally:</p>
+          <pre><code>xattr -dr com.apple.quarantine /Applications/Pour.app</code></pre>
+        </details>
+      </article>
+      <article class="card">
+        <h3>Permissions</h3>
+        <p>The first time Pour opens, a short welcome walks you through two permissions, the shortcut, and a first try:</p>
+        <ul class="list">
+          <li><b>Microphone and Speech Recognition</b>, to hear you.</li>
+          <li><b>Accessibility</b>, to type into the app you're using. Without it, Pour copies the text to the clipboard and you paste it with <kbd>⌘</kbd><kbd>V</kbd>. After you allow it, macOS may ask to quit and reopen Pour.</li>
+        </ul>
+        <p class="note">After you install a newer version, macOS may stop letting Pour type. Remove Pour from the Accessibility list in System Settings and add it again.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="requirements" class="wrap section">
+    <h2>Requirements</h2>
+    <ul class="reqs">
+      <li><span>macOS 26 or later</span>, on Apple silicon or Intel.</li>
+      <li><span>Apple Intelligence</span> turned on, for the cleanup feature only. Dictation works without it.</li>
+      <li><span>A first-time download.</span> The first time you dictate in a language, macOS downloads its speech model, which can take a minute.</li>
+    </ul>
+    <p class="note">Want to build it yourself? The source and build steps are in the <a href="https://github.com/Arpit1899/Pour#build-and-run">README on GitHub</a>.</p>
+  </section>
+
+  <section class="wrap closing">
+    <h2>Try it on your Mac</h2>
+    <div class="actions">
+      <a class="button primary" href="Pour.dmg" download>Download for Mac</a>
+      <a class="button" href="https://github.com/Arpit1899/Pour">View on GitHub</a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-row">
+    <span class="wordmark">pour<span class="dot">.</span></span>
+    <span><a href="https://github.com/Arpit1899/Pour/blob/main/LICENSE">MIT license</a> · <a href="https://github.com/Arpit1899/Pour">Source on GitHub</a></span>
+    <span>Made by <a href="https://github.com/Arpit1899">Arpit Paranjpe</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -8,3 +8,7 @@ DerivedData/
 
 # macOS
 .DS_Store
+
+# Landing page download, built locally
+site/*.dmg
+site/.vercel
